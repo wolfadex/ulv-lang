@@ -270,6 +270,44 @@ internal_initialize :: proc(env: ^Env) {
             panic("Attempted to force a non-Quote")
         }
     }})
+    // OTHER
+    append(&env.dict, Word{ label = "map", value = proc(env: ^Env) {
+        fn := pop(&env.stack)
+        values := pop(&env.stack)
+
+        #partial switch vals in values {
+        case Quote:
+            output := make([]Value, len(vals))
+
+            local_env := Env{
+                dict = env.dict
+            }
+            defer delete(local_env.stack)
+            defer delete(local_env.dict)
+
+            #partial switch f in fn {
+            case Quote:
+                for i := 0; i < len(vals); i += 1 {
+                    clear(&local_env.stack)
+                    append(&local_env.stack, vals[i])
+                    append(&local_env.stack, f)
+                    eval(&local_env, Name("force"))
+
+                    if len(local_env.stack) == 1 {
+                        output[i] = local_env.stack[0]
+                    } else {
+                        output[i] = Quote(local_env.stack[:])
+                    }
+                }
+
+                append(&env.stack, Quote(output))
+                return
+            }
+
+        }
+
+        panic("Map expects 2 quotes")
+    }})
 }
 
 internal_compare :: proc(left, right: ^Value) -> Tag {

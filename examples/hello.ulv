@@ -1,5 +1,5 @@
-1 2 < stack print
+(1 +) :inc
 
-1 2 > stack print
+(1 2 3) (inc) map
 
-1 2 compare stack print
+stack print

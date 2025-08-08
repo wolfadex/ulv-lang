@@ -127,10 +127,6 @@ parseInt =
     Parser.succeed ()
         |. Parser.chompIf Char.isDigit
         |. Parser.chompWhile Char.isDigit
-        |. Parser.oneOf
-            [ parseSpace
-            , Parser.end
-            ]
         |> Parser.getChompedString
         |> Parser.andThen
             (\digits ->
@@ -151,10 +147,6 @@ parseFloat =
         |. Parser.chompIf (\char -> char == '.')
         |. Parser.chompIf Char.isDigit
         |. Parser.chompWhile Char.isDigit
-        |. Parser.oneOf
-            [ parseSpace
-            , Parser.end
-            ]
         |> Parser.getChompedString
         |> Parser.andThen
             (\digits ->
