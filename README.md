@@ -28,4 +28,8 @@ stack # duplicates the stack, onto the stack
 print # pops and prints the top value
 
 + - * / # your basic math operators
+
+(1 2 3) (1 +) map # outputs (2 3 4)
+
+(1 2 3) 0 (+) fold
 ```

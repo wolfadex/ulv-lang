@@ -1,5 +1,7 @@
-(1 +) :inc
+(1 +) :incgit remote add origin git@github.com:wolfadex/ulv-lang.git
 
 (1 2 3) (inc) map
+ print
 
-stack print
+(1 2 3) 0 (+) fold
+ print

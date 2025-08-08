@@ -8,6 +8,7 @@ compile debugMode expressions =
     """package ulv
 
 import "core:fmt"
+import "core:slice"
 import "core:strings\""""
         ++ (if debugMode then
                 """
@@ -57,6 +58,8 @@ main :: proc() {"""
         ++ """
     env := Env{}
     internal_initialize(&env)
+    defer delete(env.stack)
+    defer delete(env.dict)
 
     // RUN PROGRAM
     for value in compiled_values {
@@ -270,37 +273,68 @@ internal_initialize :: proc(env: ^Env) {
             panic("Attempted to force a non-Quote")
         }
     }})
-    // OTHER
+    // OPERATING ON QUOTES
     append(&env.dict, Word{ label = "map", value = proc(env: ^Env) {
         fn := pop(&env.stack)
         values := pop(&env.stack)
 
         #partial switch vals in values {
         case Quote:
-            output := make([]Value, len(vals))
-
-            local_env := Env{
-                dict = env.dict
-            }
-            defer delete(local_env.stack)
-            defer delete(local_env.dict)
-
             #partial switch f in fn {
             case Quote:
                 for i := 0; i < len(vals); i += 1 {
-                    clear(&local_env.stack)
+                    local_env := Env{
+                        dict = slice.clone_to_dynamic(env.dict[:], allocator = context.temp_allocator)
+                    }
+                    defer delete(local_env.stack)
+                    defer delete(local_env.dict)
                     append(&local_env.stack, vals[i])
                     append(&local_env.stack, f)
                     eval(&local_env, Name("force"))
 
                     if len(local_env.stack) == 1 {
-                        output[i] = local_env.stack[0]
+                        vals[i] = local_env.stack[0]
                     } else {
-                        output[i] = Quote(local_env.stack[:])
+                        vals[i] = Quote(local_env.stack[:])
                     }
                 }
 
-                append(&env.stack, Quote(output))
+                append(&env.stack, Quote(vals))
+                return
+            }
+
+        }
+
+        panic("Map expects 2 quotes")
+    }})
+    append(&env.dict, Word{ label = "fold", value = proc(env: ^Env) {
+        fn := pop(&env.stack)
+        result := pop(&env.stack)
+        values := pop(&env.stack)
+
+        #partial switch vals in values {
+        case Quote:
+            #partial switch f in fn {
+            case Quote:
+                for i := 0; i < len(vals); i += 1 {
+                    local_env := Env{
+                        dict = slice.clone_to_dynamic(env.dict[:], allocator = context.temp_allocator)
+                    }
+                    defer delete(local_env.stack)
+                    defer delete(local_env.dict)
+                    append(&local_env.stack, result)
+                    append(&local_env.stack, vals[i])
+                    append(&local_env.stack, f)
+                    eval(&local_env, Name("force"))
+
+                    if len(local_env.stack) == 1 {
+                        result = local_env.stack[0]
+                    } else {
+                        result = Quote(local_env.stack[:])
+                    }
+                }
+
+                append(&env.stack, result)
                 return
             }
 
@@ -462,7 +496,7 @@ eval :: proc(env: ^Env, value: Value) {
                 eval(env, named_value.value)
             }
         } else {
-            panic("Unknown word!")
+            panic(fmt.aprintf("Unknown word! %s", v))
         }
     case Tag:
         append(&env.stack, v)
@@ -476,7 +510,7 @@ eval :: proc(env: ^Env, value: Value) {
             if found {
                 append(&env.stack, named_value.value)
             } else {
-                panic("Unknown word!")
+                panic(fmt.aprintf("Unknown word! %s", v.name))
             }
         }
     case Internal:
