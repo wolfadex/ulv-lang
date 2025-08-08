@@ -340,7 +340,21 @@ internal_initialize :: proc(env: ^Env) {
 
         }
 
-        panic("Map expects 2 quotes")
+        panic("Fold expects 2 quotes and an initial value")
+    }})
+    append(&env.dict, Word{ label = "reverse", value = proc(env: ^Env) {
+        value := pop(&env.stack)
+
+        #partial switch val in value {
+        case Quote:
+            rev := val[:]
+            slice.reverse(rev)
+
+            append(&env.stack, rev)
+            return
+        }
+
+        panic("Reverse expects a quote")
     }})
 }
 

@@ -32,4 +32,6 @@ print # pops and prints the top value
 (1 2 3) (1 +) map # outputs (2 3 4)
 
 (1 2 3) 0 (+) fold
+
+(1 2 3) reverse # (3 2 1)
 ```
