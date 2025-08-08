@@ -1,0 +1,15 @@
+{
+    "name": "ulv-lang",
+    "version": "1.0.0",
+    "scripts": {
+        "dev": "elm-pages run src/Ulv/Cli.elm --"
+    },
+    "author": "Wolfgang Schuster",
+    "description": "",
+    "devDependencies": {
+        "elm-pages": "^3.0.24"
+    },
+    "volta": {
+        "node": "22.18.0"
+    }
+}

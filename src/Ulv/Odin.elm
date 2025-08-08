@@ -1,0 +1,296 @@
+module Ulv.Odin exposing (compile)
+
+import Ulv.Parser
+
+
+compile : List Ulv.Parser.Expression -> String
+compile expressions =
+    """package ulv
+
+import "core:fmt"
+import "core:strings"
+
+main :: proc() {
+    env := Env{}
+    // MATH
+    append(&env.dict, Word{ label = "+", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        #partial switch r in right {
+        case int:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case int:
+                append(&env.stack, l + r)
+                return
+            }
+        case f64:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case f64:
+                append(&env.stack, l + r)
+                return
+            }
+        }
+
+        panic("Can only add ints or floats")
+    }})
+    append(&env.dict, Word{ label = "-", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        #partial switch r in right {
+        case int:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case int:
+                append(&env.stack, l - r)
+                return
+            }
+        case f64:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case f64:
+                append(&env.stack, l - r)
+                return
+            }
+        }
+
+        panic("Can only add ints or floats")
+    }})
+    append(&env.dict, Word{ label = "*", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        #partial switch r in right {
+        case int:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case int:
+                append(&env.stack, l * r)
+                return
+            }
+        case f64:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case f64:
+                append(&env.stack, l * r)
+                return
+            }
+        }
+
+        panic("Can only add ints or floats")
+    }})
+    append(&env.dict, Word{ label = "/", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        #partial switch r in right {
+        case int:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case int:
+                append(&env.stack, l / r)
+                return
+            }
+        case f64:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case f64:
+                append(&env.stack, l / r)
+                return
+            }
+        }
+
+        panic("Can only add ints or floats")
+    }})
+    // IO
+    append(&env.dict, Word{ label = "print", value = proc(env: ^Env) {
+        value := pop(&env.stack)
+        fmt.println(value_to_print_string(value))
+    }})
+    append(&env.dict, Word{ label = "stack", value = proc(env: ^Env) {
+        append(&env.stack, Quote(env.stack[:]))
+    }})
+    append(&env.dict, Word{ label = "force", value = proc(env: ^Env) {
+        value := pop(&env.stack)
+        #partial switch v in value {
+        case Quote:
+            for w in v {
+                eval(env, w)
+            }
+        case:
+            panic("Attempted to force a non-Quote")
+        }
+    }})
+
+    // RUN PROGRAM
+    for value in compiled_values {
+        eval(&env, value)
+    }
+}
+
+eval :: proc(env: ^Env, value: Value) {
+    switch v in value {
+    case int:
+        append(&env.stack, v)
+    case f64:
+        append(&env.stack, v)
+    case string:
+        append(&env.stack, v)
+    case Quote:
+        append(&env.stack, v)
+    case Name:
+        named_value, found := find_named(&env.dict, v)
+        if found {
+            #partial switch nv in named_value.value {
+            case Quote:
+                for w in nv {
+                    eval(env, w)
+                }
+            case:
+                eval(env, named_value.value)
+            }
+        } else {
+            panic("Unknown word!")
+        }
+    case Command:
+        switch v.cmd {
+        case .Assign:
+            named_value := pop(&env.stack)
+            append(&env.dict, Word{label = v.name, value = named_value})
+        case .Push:
+            named_value, found := find_named(&env.dict, v.name)
+            if found {
+                append(&env.stack, named_value.value)
+            } else {
+                panic("Unknown word!")
+            }
+        }
+    case Internal:
+        v(env)
+    }
+}
+
+value_to_print_string :: proc(value: Value) -> (str: string) {
+    switch v in value {
+    case int:
+        str = fmt.aprintf("%d", v, allocator = context.temp_allocator)
+    case f64:
+        str = fmt.aprintf("%f", v, allocator = context.temp_allocator)
+    case string:
+        str = v
+    case Quote:
+        body_strs := make([]string, len(v))
+        defer delete(body_strs)
+
+        for val, i in v {
+            body_strs[i] = value_to_print_string(val)
+        }
+
+        body_str, err := strings.join(body_strs, ", ", allocator = context.temp_allocator)
+
+        if err != nil {
+            panic("Error printing quote")
+        }
+
+        str = fmt.aprintf("(%s)", body_str, allocator = context.temp_allocator)
+    case Name:
+        str = string(v)
+    case Command:
+        switch v.cmd {
+        case .Assign:
+            str = fmt.aprintf(":%s", v.name, allocator = context.temp_allocator)
+        case .Push:
+            str = fmt.aprintf("^%s", v.name, allocator = context.temp_allocator)
+        }
+    case Internal:
+        str = "<internal>"
+    }
+
+    return
+}
+
+Env :: struct {
+    stack: [dynamic]Value,
+    dict: [dynamic]Word,
+}
+
+Word :: struct {
+    label: Name,
+    value: Value,
+}
+
+Value :: union #no_nil {int, f64, string, Name, Quote, Command, Internal}
+
+Quote :: []Value
+
+Name :: distinct string
+
+Internal :: proc(env: ^Env)
+
+Command :: struct {
+    name: Name,
+    cmd: Command_Type,
+}
+
+Command_Type :: enum {
+    Assign,
+    Push,
+}
+
+find_named :: proc(dict: ^[dynamic]Word, label: Name) -> (w: Word, found: bool) {
+    for word in dict {
+        if word.label == label {
+            w = word
+            found = true
+            return
+        }
+    }
+
+    return
+}
+
+compiled_values : []Value = {
+""" ++ compileExpressions expressions ++ """
+}
+
+"""
+
+
+compileExpressions : List Ulv.Parser.Expression -> String
+compileExpressions expressions =
+    expressions
+        |> List.map compileExpression
+        |> String.join ", "
+
+
+compileExpression : Ulv.Parser.Expression -> String
+compileExpression expression =
+    case expression of
+        Ulv.Parser.Exp_Integer int ->
+            "int(" ++ String.fromInt int ++ ")"
+
+        Ulv.Parser.Exp_Float float ->
+            "f64(" ++ String.fromFloat float ++ ")"
+
+        Ulv.Parser.Exp_String string ->
+            "string(\"" ++ string ++ "\")"
+
+        Ulv.Parser.Exp_Name possiblyCommand name ->
+            case possiblyCommand of
+                Nothing ->
+                    "Name(\"" ++ name ++ "\")"
+
+                Just command ->
+                    compileCommand name command
+
+        Ulv.Parser.Exp_Quote body ->
+            "Quote({" ++ compileExpressions body ++ "})"
+
+
+compileCommand : String -> Ulv.Parser.Command -> String
+compileCommand name command =
+    let
+        commandStr =
+            case command of
+                Ulv.Parser.Assign ->
+                    ".Assign"
+
+                Ulv.Parser.Push ->
+                    ".Push"
+    in
+    "Command{name = Name(\"" ++ name ++ "\"), cmd = " ++ commandStr ++ "}"
