@@ -203,16 +203,45 @@ main :: proc() {"""
             panic("The condition of an if isn't True or False")
         }
     }})
-    // append(&env.dict, Word{ label = "<", value = proc(env: ^Env) {
-    //     right := pop(&env.stack)
-    //     left := pop(&env.stack)
-    //
-    //     comp := internal_compare(&left, &right)
-    //
-    //     append(&env.stack, comp == .LT)
-    //
-    //     panic("Unable to do comparison on these types")
-    // }})
+    append(&env.dict, Word{ label = "<", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        left := pop(&env.stack)
+
+        comp := internal_compare(&left, &right)
+
+        append(&env.stack, comp == Tag("LT"))
+    }})
+    append(&env.dict, Word{ label = ">", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        left := pop(&env.stack)
+
+        comp := internal_compare(&left, &right)
+
+        append(&env.stack, comp == Tag("GT"))
+    }})
+    append(&env.dict, Word{ label = "<=", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        left := pop(&env.stack)
+
+        comp := internal_compare(&left, &right)
+
+        append(&env.stack, comp == Tag("LT") || comp == Tag("EQ"))
+    }})
+    append(&env.dict, Word{ label = ">=", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        left := pop(&env.stack)
+
+        comp := internal_compare(&left, &right)
+
+        append(&env.stack, comp == Tag("GT") || comp == Tag("EQ"))
+    }})
+    append(&env.dict, Word{ label = "compare", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        left := pop(&env.stack)
+
+        comp := internal_compare(&left, &right)
+        append(&env.stack, comp)
+    }})
     // IO
     append(&env.dict, Word{ label = "print", value = proc(env: ^Env) {
         value := pop(&env.stack)
@@ -239,8 +268,74 @@ main :: proc() {"""
     }
 }
 
-// internal_compare :: proc(left, right: ^Value) -> Value {
-// }
+internal_compare :: proc(left, right: ^Value) -> Tag {
+    #partial switch r in right {
+    case bool:
+        panic("Booleans are equatable but not comparable")
+    case int:
+        #partial switch l in left {
+        case int:
+            if  l == r {
+                return Tag("EQ")
+            } else if l < r {
+                return Tag("LT")
+            } else {
+                return Tag("GT")
+            }
+        }
+    case f64:
+        #partial switch l in left {
+        case f64:
+            if  l == r {
+                return Tag("EQ")
+            } else if l < r {
+                return Tag("LT")
+            } else {
+                return Tag("GT")
+            }
+        }
+    case string:
+        #partial switch l in left {
+        case string:
+            if  l == r {
+                return Tag("EQ")
+            } else if l < r {
+                return Tag("LT")
+            } else {
+                return Tag("GT")
+            }
+        }
+    case Name:
+        panic("Names are equatable but not comparable")
+    case Tag:
+        panic("Tags are equatable but not comparable")
+    case Quote:
+        #partial switch l in left {
+        case Quote:
+            for i := 0; i < min(len(l), len(r)); i += 1 {
+                comp := internal_compare(&l[i], &r[i])
+
+                if comp == Tag("LT") || comp == Tag("GT") {
+                    return comp
+                }
+            }
+
+            if len(l) == len(r) {
+                return Tag("EQ")
+            } else if len(l) < len(r) {
+                return Tag("LT")
+            } else {
+                return Tag("GT")
+            }
+        }
+    case Command:
+        panic("Commands are equatable but not comparable")
+    case Internal:
+        panic("Cannot '=' internal values")
+    }
+
+    panic("Can only '>' values of the same type")
+}
 
 internal_equal :: proc(left, right: ^Value) -> bool {
     #partial switch r in right {
@@ -269,6 +364,11 @@ internal_equal :: proc(left, right: ^Value) -> bool {
         case Name:
             return l == r
         }
+    case Tag:
+        #partial switch l in left {
+        case Tag:
+            return l == r
+        }
     case Quote:
         #partial switch l in left {
         case Quote:
@@ -276,11 +376,9 @@ internal_equal :: proc(left, right: ^Value) -> bool {
                 return false
             }
 
-            for &ri in r {
-                for &le in l {
-                    if !internal_equal(&le, &ri) {
-                        return false
-                    }
+            for i := 0; i < min(len(l), len(r)); i += 1 {
+                if !internal_equal(&l[i], &r[i]) {
+                    return false
                 }
             }
 
@@ -324,6 +422,8 @@ eval :: proc(env: ^Env, value: Value) {
         } else {
             panic("Unknown word!")
         }
+    case Tag:
+        append(&env.stack, v)
     case Command:
         switch v.cmd {
         case .Assign:
@@ -373,6 +473,8 @@ value_to_print_string :: proc(value: Value) -> (str: string) {
         str = fmt.aprintf("(%s)", body_str, allocator = context.temp_allocator)
     case Name:
         str = string(v)
+    case Tag:
+        str = string(v)
     case Command:
         switch v.cmd {
         case .Assign:
@@ -397,11 +499,13 @@ Word :: struct {
     value: Value,
 }
 
-Value :: union #no_nil {int, f64, string, bool, Name, Quote, Command, Internal}
+Value :: union #no_nil {int, f64, string, bool, Name, Tag, Quote, Command, Internal}
 
 Quote :: []Value
 
 Name :: distinct string
+
+Tag :: distinct string
 
 Internal :: proc(env: ^Env)
 
@@ -462,7 +566,7 @@ compileExpression expression =
         Ulv.Parser.Exp_String string ->
             "string(\"" ++ string ++ "\")"
 
-        Ulv.Parser.Exp_Name possiblyCommand name ->
+        Ulv.Parser.Exp_Name possiblyCommand (Ulv.Parser.Name name) ->
             case possiblyCommand of
                 Nothing ->
                     "Name(\"" ++ name ++ "\")"
@@ -472,6 +576,9 @@ compileExpression expression =
 
         Ulv.Parser.Exp_Quote body ->
             "Quote({" ++ compileExpressions body ++ "})"
+
+        Ulv.Parser.Exp_Tag (Ulv.Parser.Tag tag) ->
+            "Tag(\"" ++ tag ++ "\")"
 
 
 compileCommand : String -> Ulv.Parser.Command -> String

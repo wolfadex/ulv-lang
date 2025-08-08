@@ -1,4 +1,11 @@
-module Ulv.Parser exposing (Command(..), Error(..), Expression(..), parse)
+module Ulv.Parser exposing
+    ( Command(..)
+    , Error(..)
+    , Expression(..)
+    , Name(..)
+    , Tag(..)
+    , parse
+    )
 
 import Parser exposing ((|.), (|=), Parser)
 import Parser.Workaround
@@ -14,7 +21,17 @@ type Expression
     | Exp_Boolean Bool
     | Exp_String String
     | Exp_Quote (List Expression)
-    | Exp_Name (Maybe Command) String
+    | Exp_Name (Maybe Command) Name
+      -- Experimental
+    | Exp_Tag Tag
+
+
+type Name
+    = Name String
+
+
+type Tag
+    = Tag String
 
 
 type Command
@@ -65,6 +82,9 @@ parseExpression =
             |= parseString
         , Parser.succeed Exp_Boolean
             |= parseBoolean
+            |> Parser.backtrackable
+        , Parser.succeed Exp_Tag
+            |= parseTag
         , parseName
         , Parser.succeed Exp_Quote
             |= parseQuote
@@ -169,7 +189,7 @@ parseCommand =
         ]
 
 
-parseNameHelper : Parser String
+parseNameHelper : Parser Name
 parseNameHelper =
     Parser.succeed ()
         |. Parser.chompIf
@@ -180,9 +200,21 @@ parseNameHelper =
                     || (char == '+')
                     || (char == '*')
                     || (char == '/')
+                    || (char == '<')
+                    || (char == '>')
             )
         |. Parser.chompWhile (\char -> Char.isAlphaNum char || (char == '_') || (char == '-'))
         |> Parser.getChompedString
+        |> Parser.map Name
+
+
+parseTag : Parser Tag
+parseTag =
+    Parser.succeed ()
+        |. Parser.chompIf (\char -> Char.isAlpha char && Char.isUpper char)
+        |. Parser.chompWhile (\char -> Char.isAlphaNum char || (char == '_') || (char == '-'))
+        |> Parser.getChompedString
+        |> Parser.map Tag
 
 
 parseSpace : Parser ()

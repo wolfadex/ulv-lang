@@ -1,8 +1,5 @@
-# allows for writing ifs in a "normal" manner
-(:false :true :cond :if ^false ^true ^cond if) :endif # hooray 🎉
+1 2 < stack print
 
-^if (1 2 =) # why would 1 ever equal 2???
-    ("true")
-    ("false")
-endif
-print
+1 2 > stack print
+
+1 2 compare stack print
