@@ -56,6 +56,15 @@ main :: proc() {"""
            )
         ++ """
     env := Env{}
+    internal_initialize(&env)
+
+    // RUN PROGRAM
+    for value in compiled_values {
+        eval(&env, value)
+    }
+}
+
+internal_initialize :: proc(env: ^Env) {
     // MATH
     append(&env.dict, Word{ label = "+", value = proc(env: ^Env) {
         right := pop(&env.stack)
@@ -261,11 +270,6 @@ main :: proc() {"""
             panic("Attempted to force a non-Quote")
         }
     }})
-
-    // RUN PROGRAM
-    for value in compiled_values {
-        eval(&env, value)
-    }
 }
 
 internal_compare :: proc(left, right: ^Value) -> Tag {
