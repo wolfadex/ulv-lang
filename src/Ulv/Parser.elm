@@ -1,6 +1,7 @@
 module Ulv.Parser exposing (Command(..), Error(..), Expression(..), parse)
 
 import Parser exposing ((|.), (|=), Parser)
+import Parser.Workaround
 
 
 type Error
@@ -10,9 +11,10 @@ type Error
 type Expression
     = Exp_Integer Int
     | Exp_Float Float
+    | Exp_Boolean Bool
     | Exp_String String
-    | Exp_Name (Maybe Command) String
     | Exp_Quote (List Expression)
+    | Exp_Name (Maybe Command) String
 
 
 type Command
@@ -38,10 +40,18 @@ parseFileHelper reverseExpressions =
     Parser.oneOf
         [ Parser.succeed (Parser.Done (List.reverse reverseExpressions))
             |. Parser.end
+        , Parser.succeed (Parser.Loop reverseExpressions)
+            |. parseLineComment
+            |. parseSpaces
         , Parser.succeed (\expression -> Parser.Loop (expression :: reverseExpressions))
             |= parseExpression
             |. parseSpaces
         ]
+
+
+parseLineComment : Parser ()
+parseLineComment =
+    Parser.Workaround.lineCommentAfter "#"
 
 
 parseExpression : Parser Expression
@@ -53,6 +63,8 @@ parseExpression =
             |= parseInt
         , Parser.succeed Exp_String
             |= parseString
+        , Parser.succeed Exp_Boolean
+            |= parseBoolean
         , parseName
         , Parser.succeed Exp_Quote
             |= parseQuote
@@ -71,9 +83,22 @@ parseQuoteBody reverseExpressions =
     Parser.oneOf
         [ Parser.succeed (Parser.Done (List.reverse reverseExpressions))
             |. Parser.symbol ")"
+        , Parser.succeed (Parser.Loop reverseExpressions)
+            |. parseLineComment
+            |. parseSpaces
         , Parser.succeed (\expression -> Parser.Loop (expression :: reverseExpressions))
             |= Parser.lazy (\() -> parseExpression)
             |. parseSpaces
+        ]
+
+
+parseBoolean : Parser Bool
+parseBoolean =
+    Parser.oneOf
+        [ Parser.succeed True
+            |. Parser.keyword "True"
+        , Parser.succeed False
+            |. Parser.keyword "False"
         ]
 
 
@@ -149,7 +174,7 @@ parseNameHelper =
     Parser.succeed ()
         |. Parser.chompIf
             (\char ->
-                Char.isAlpha char
+                (Char.isAlpha char && Char.isLower char)
                     || (char == '=')
                     || (char == '-')
                     || (char == '+')

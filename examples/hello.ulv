@@ -1,1 +1,8 @@
-5 (:x ^x ^x) force stack print
+# allows for writing ifs in a "normal" manner
+(:false :true :cond :if ^false ^true ^cond if) :endif # hooray 🎉
+
+^if (1 2 =) # why would 1 ever equal 2???
+    ("true")
+    ("false")
+endif
+print

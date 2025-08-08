@@ -3,14 +3,58 @@ module Ulv.Odin exposing (compile)
 import Ulv.Parser
 
 
-compile : List Ulv.Parser.Expression -> String
-compile expressions =
+compile : Bool -> List Ulv.Parser.Expression -> String
+compile debugMode expressions =
     """package ulv
 
 import "core:fmt"
-import "core:strings"
+import "core:strings\""""
+        ++ (if debugMode then
+                """
+import "core:log"
+import "core:mem"
+"""
 
-main :: proc() {
+            else
+                ""
+           )
+        ++ """
+
+main :: proc() {"""
+        ++ (if debugMode then
+                """
+    when ODIN_DEBUG {
+        // setup debug logging
+        logger := log.create_console_logger()
+        context.logger = logger
+
+        // setup tracking allocator for making sure all memory is cleaned up
+        default_allocator := context.allocator
+        tracking_allocator: mem.Tracking_Allocator
+        mem.tracking_allocator_init(&tracking_allocator, default_allocator)
+        context.allocator = mem.tracking_allocator(&tracking_allocator)
+
+        reset_tracking_allocator :: proc(a: ^mem.Tracking_Allocator) -> bool {
+            err := false
+
+            for _, value in a.allocation_map {
+                fmt.printfln("%v: Leaked %v bytes", value.location, value.size)
+                err = true
+            }
+
+            mem.tracking_allocator_clear(a)
+
+            return err
+        }
+
+        defer reset_tracking_allocator(&tracking_allocator)
+    }
+"""
+
+            else
+                ""
+           )
+        ++ """
     env := Env{}
     // MATH
     append(&env.dict, Word{ label = "+", value = proc(env: ^Env) {
@@ -97,6 +141,78 @@ main :: proc() {
 
         panic("Can only add ints or floats")
     }})
+    // BOOLEAN LOGIC
+    append(&env.dict, Word{ label = "and", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        #partial switch r in right {
+        case bool:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case bool:
+                append(&env.stack, l && r)
+                return
+            }
+        }
+
+        panic("Can only 'and' booleans")
+    }})
+    append(&env.dict, Word{ label = "or", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        #partial switch r in right {
+        case bool:
+            left := pop(&env.stack)
+            #partial switch l in left {
+            case bool:
+                append(&env.stack, l || r)
+                return
+            }
+        }
+
+        panic("Can only 'or' booleans")
+    }})
+    append(&env.dict, Word{ label = "not", value = proc(env: ^Env) {
+        value := pop(&env.stack)
+        #partial switch v in value {
+        case bool:
+            append(&env.stack, !v)
+            return
+        }
+
+        panic("Can only 'not' booleans")
+    }})
+    append(&env.dict, Word{ label = "=", value = proc(env: ^Env) {
+        right := pop(&env.stack)
+        left := pop(&env.stack)
+        append(&env.stack, internal_equal(&left, &right))
+    }})
+    append(&env.dict, Word{ label = "if", value = proc(env: ^Env) {
+        eval(env, Name("force"))
+        condition := pop(&env.stack)
+
+        #partial switch cond in condition {
+        case bool:
+            when_true := pop(&env.stack)
+
+            if cond {
+                pop(&env.stack)
+                append(&env.stack, when_true)
+            }
+
+            eval(env, Name("force"))
+        case:
+            panic("The condition of an if isn't True or False")
+        }
+    }})
+    // append(&env.dict, Word{ label = "<", value = proc(env: ^Env) {
+    //     right := pop(&env.stack)
+    //     left := pop(&env.stack)
+    //
+    //     comp := internal_compare(&left, &right)
+    //
+    //     append(&env.stack, comp == .LT)
+    //
+    //     panic("Unable to do comparison on these types")
+    // }})
     // IO
     append(&env.dict, Word{ label = "print", value = proc(env: ^Env) {
         value := pop(&env.stack)
@@ -123,11 +239,72 @@ main :: proc() {
     }
 }
 
+// internal_compare :: proc(left, right: ^Value) -> Value {
+// }
+
+internal_equal :: proc(left, right: ^Value) -> bool {
+    #partial switch r in right {
+    case bool:
+        #partial switch l in left {
+        case bool:
+            return l == r
+        }
+    case int:
+        #partial switch l in left {
+        case int:
+            return l == r
+        }
+    case f64:
+        #partial switch l in left {
+        case f64:
+            return l == r
+        }
+    case string:
+        #partial switch l in left {
+        case string:
+            return l == r
+        }
+    case Name:
+        #partial switch l in left {
+        case Name:
+            return l == r
+        }
+    case Quote:
+        #partial switch l in left {
+        case Quote:
+            if len(r) != len(l) {
+                return false
+            }
+
+            for &ri in r {
+                for &le in l {
+                    if !internal_equal(&le, &ri) {
+                        return false
+                    }
+                }
+            }
+
+            return true
+        }
+    case Command:
+        #partial switch l in left {
+        case Command:
+            return l == r
+        }
+    case Internal:
+        panic("Cannot '=' internal values")
+    }
+
+    panic("Can only '=' values of the same type")
+}
+
 eval :: proc(env: ^Env, value: Value) {
     switch v in value {
     case int:
         append(&env.stack, v)
     case f64:
+        append(&env.stack, v)
+    case bool:
         append(&env.stack, v)
     case string:
         append(&env.stack, v)
@@ -171,6 +348,12 @@ value_to_print_string :: proc(value: Value) -> (str: string) {
         str = fmt.aprintf("%d", v, allocator = context.temp_allocator)
     case f64:
         str = fmt.aprintf("%f", v, allocator = context.temp_allocator)
+    case bool:
+        if v {
+            str = "True"
+        } else {
+            str = "False"
+        }
     case string:
         str = v
     case Quote:
@@ -214,7 +397,7 @@ Word :: struct {
     value: Value,
 }
 
-Value :: union #no_nil {int, f64, string, Name, Quote, Command, Internal}
+Value :: union #no_nil {int, f64, string, bool, Name, Quote, Command, Internal}
 
 Quote :: []Value
 
@@ -245,7 +428,9 @@ find_named :: proc(dict: ^[dynamic]Word, label: Name) -> (w: Word, found: bool) 
 }
 
 compiled_values : []Value = {
-""" ++ compileExpressions expressions ++ """
+"""
+        ++ compileExpressions expressions
+        ++ """
 }
 
 """
@@ -266,6 +451,13 @@ compileExpression expression =
 
         Ulv.Parser.Exp_Float float ->
             "f64(" ++ String.fromFloat float ++ ")"
+
+        Ulv.Parser.Exp_Boolean bool ->
+            if bool then
+                "true"
+
+            else
+                "false"
 
         Ulv.Parser.Exp_String string ->
             "string(\"" ++ string ++ "\")"

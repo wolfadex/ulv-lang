@@ -2,7 +2,7 @@
     "name": "ulv-lang",
     "version": "1.0.0",
     "scripts": {
-        "dev": "elm-pages run src/Ulv/Cli.elm --"
+        "dev": "elm-pages run src/Ulv/Cli.elm"
     },
     "author": "Wolfgang Schuster",
     "description": "",

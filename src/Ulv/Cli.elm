@@ -13,7 +13,7 @@ import Ulv.Parser
 run : Script
 run =
     Pages.Script.withCliOptions program
-        (\{ entryFilePath } ->
+        (\{ entryFilePath, debugMode } ->
             BackendTask.File.rawFile entryFilePath
                 |> BackendTask.allowFatal
                 |> BackendTask.andThen
@@ -25,7 +25,7 @@ run =
                             Ok expressions ->
                                 Pages.Script.writeFile
                                     { path = "ulv.odin"
-                                    , body = Ulv.Odin.compile expressions
+                                    , body = Ulv.Odin.compile debugMode expressions
                                     }
                                     |> BackendTask.allowFatal
                     )
@@ -34,6 +34,7 @@ run =
 
 type alias CliOptions =
     { entryFilePath : String
+    , debugMode : Bool
     }
 
 
@@ -44,4 +45,6 @@ program =
             (Cli.OptionsParser.build CliOptions
                 |> Cli.OptionsParser.with
                     (Cli.Option.requiredPositionalArg "entry file")
+                |> Cli.OptionsParser.with
+                    (Cli.Option.flag "debug")
             )
