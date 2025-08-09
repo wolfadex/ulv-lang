@@ -284,7 +284,7 @@ internal_initialize :: proc(env: ^Env) {
             case Quote:
                 for i := 0; i < len(vals); i += 1 {
                     local_env := Env{
-                        dict = slice.clone_to_dynamic(env.dict[:], allocator = context.temp_allocator)
+                        dict = slice.clone_to_dynamic(env.dict[:], allocator = context.temp_allocator),
                     }
                     defer delete(local_env.stack)
                     defer delete(local_env.dict)
@@ -318,7 +318,7 @@ internal_initialize :: proc(env: ^Env) {
             case Quote:
                 for i := 0; i < len(vals); i += 1 {
                     local_env := Env{
-                        dict = slice.clone_to_dynamic(env.dict[:], allocator = context.temp_allocator)
+                        dict = slice.clone_to_dynamic(env.dict[:], allocator = context.temp_allocator),
                     }
                     defer delete(local_env.stack)
                     defer delete(local_env.dict)
@@ -356,6 +356,78 @@ internal_initialize :: proc(env: ^Env) {
 
         panic("Reverse expects a quote")
     }})
+    append(&env.dict, Word{ label = "concat", value = proc(env: ^Env) {
+        values := pop(&env.stack)
+
+        #partial switch vals in values {
+        case Quote:
+            #partial switch val in vals[0] {
+            case string:
+                internal_concat_string(env, vals)
+            case Quote:
+                internal_concat_quotes(env, vals)
+            case:
+                panic("This type cannot be concated")
+            }
+
+            return
+        }
+
+        panic("Concat expects a quote of like type concatable values")
+    }})
+}
+
+internal_concat_string :: proc(env: ^Env, values: Quote) {
+
+    local_env := Env{
+        dict = slice.clone_to_dynamic(env.dict[:], allocator = context.temp_allocator),
+    }
+    defer delete(local_env.stack)
+    defer delete(local_env.dict)
+    append(&local_env.stack, values)
+    eval(&local_env, Name("force"))
+
+    strs := make([]string, len(local_env.stack))
+    defer delete(strs)
+
+    for value, i in local_env.stack {
+        #partial switch val in value {
+        case string:
+            strs[i] = val
+        case:
+            panic("Expected a string for concatenation")
+        }
+    }
+
+    str, err := strings.concatenate(strs[:], allocator = context.temp_allocator)
+
+    if err != nil {
+        panic("Error concating strings")
+    }
+
+    append(&env.stack, string(str))
+}
+
+internal_concat_quotes :: proc(env: ^Env, values: Quote) {
+    quotes := make([]Quote, len(values))
+    defer delete(quotes)
+
+    for value, i in values {
+        #partial switch val in value {
+        case Quote:
+            quotes[i] = val
+        case:
+            panic("Expected a quote for concatenation")
+        }
+    }
+
+    quote, err := slice.concatenate(quotes, allocator = context.temp_allocator)
+
+    if err != nil {
+        panic("Error concating quotes")
+    }
+
+    append(&env.stack, Quote(quote))
 }
 
 internal_compare :: proc(left, right: ^Value) -> Tag {
