@@ -203,7 +203,7 @@ parseNameHelper =
 parseTag : Parser Tag
 parseTag =
     Parser.succeed ()
-        |. Parser.chompIf (\char -> Char.isAlpha char && Char.isUpper char)
+        |. Parser.chompIf (\char -> char == '@')
         |. Parser.chompWhile (\char -> Char.isAlphaNum char || (char == '_') || (char == '-'))
         |> Parser.getChompedString
         |> Parser.map Tag

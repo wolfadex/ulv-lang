@@ -19,6 +19,10 @@ Some examples
 
 ^age # push the value of `age` to the stack, in this case `23`
 
+@Ok # A tag. Essentially a word that doesn't do anything but can be used for denoting info
+# e.g.
+1 2 compare # puts @LT on the stack
+
 # how about some built-ins!
 
 force # pop a quote and execute it
@@ -29,9 +33,9 @@ print # pops and prints the top value
 
 + - * / # your basic math operators
 
-(1 2 3) (1 +) map # outputs (2 3 4)
+(1 2 3) (1 +) map # (2 3 4)
 
-(1 2 3) 0 (+) fold
+(1 2 3) 0 (+) fold # (6)
 
 (1 2 3) reverse # (3 2 1)
 ```

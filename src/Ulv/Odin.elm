@@ -221,7 +221,7 @@ internal_initialize :: proc(env: ^Env) {
 
         comp := internal_compare(&left, &right)
 
-        append(&env.stack, comp == Tag("LT"))
+        append(&env.stack, comp == Tag("@LT"))
     }})
     append(&env.dict, Word{ label = ">", value = proc(env: ^Env) {
         right := pop(&env.stack)
@@ -229,7 +229,7 @@ internal_initialize :: proc(env: ^Env) {
 
         comp := internal_compare(&left, &right)
 
-        append(&env.stack, comp == Tag("GT"))
+        append(&env.stack, comp == Tag("@GT"))
     }})
     append(&env.dict, Word{ label = "<=", value = proc(env: ^Env) {
         right := pop(&env.stack)
@@ -237,7 +237,7 @@ internal_initialize :: proc(env: ^Env) {
 
         comp := internal_compare(&left, &right)
 
-        append(&env.stack, comp == Tag("LT") || comp == Tag("EQ"))
+        append(&env.stack, comp == Tag("@LT") || comp == Tag("@EQ"))
     }})
     append(&env.dict, Word{ label = ">=", value = proc(env: ^Env) {
         right := pop(&env.stack)
@@ -245,7 +245,7 @@ internal_initialize :: proc(env: ^Env) {
 
         comp := internal_compare(&left, &right)
 
-        append(&env.stack, comp == Tag("GT") || comp == Tag("EQ"))
+        append(&env.stack, comp == Tag("@GT") || comp == Tag("@EQ"))
     }})
     append(&env.dict, Word{ label = "compare", value = proc(env: ^Env) {
         right := pop(&env.stack)
@@ -366,33 +366,33 @@ internal_compare :: proc(left, right: ^Value) -> Tag {
         #partial switch l in left {
         case int:
             if  l == r {
-                return Tag("EQ")
+                return Tag("@EQ")
             } else if l < r {
-                return Tag("LT")
+                return Tag("@LT")
             } else {
-                return Tag("GT")
+                return Tag("@GT")
             }
         }
     case f64:
         #partial switch l in left {
         case f64:
             if  l == r {
-                return Tag("EQ")
+                return Tag("@EQ")
             } else if l < r {
-                return Tag("LT")
+                return Tag("@LT")
             } else {
-                return Tag("GT")
+                return Tag("@GT")
             }
         }
     case string:
         #partial switch l in left {
         case string:
             if  l == r {
-                return Tag("EQ")
+                return Tag("@EQ")
             } else if l < r {
-                return Tag("LT")
+                return Tag("@LT")
             } else {
-                return Tag("GT")
+                return Tag("@GT")
             }
         }
     case Name:
@@ -405,17 +405,17 @@ internal_compare :: proc(left, right: ^Value) -> Tag {
             for i := 0; i < min(len(l), len(r)); i += 1 {
                 comp := internal_compare(&l[i], &r[i])
 
-                if comp == Tag("LT") || comp == Tag("GT") {
+                if comp == Tag("@LT") || comp == Tag("@GT") {
                     return comp
                 }
             }
 
             if len(l) == len(r) {
-                return Tag("EQ")
+                return Tag("@EQ")
             } else if len(l) < len(r) {
-                return Tag("LT")
+                return Tag("@LT")
             } else {
-                return Tag("GT")
+                return Tag("@GT")
             }
         }
     case Command:
