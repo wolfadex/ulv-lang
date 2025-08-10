@@ -195,7 +195,14 @@ parseNameHelper =
                     || (char == '<')
                     || (char == '>')
             )
-        |. Parser.chompWhile (\char -> Char.isAlphaNum char || (char == '_') || (char == '-'))
+        |. Parser.chompWhile
+            (\char ->
+                Char.isAlphaNum char
+                    || (char == '_')
+                    || (char == '-')
+                    || (char == '?')
+                    || (char == '!')
+            )
         |> Parser.getChompedString
         |> Parser.map Name
 

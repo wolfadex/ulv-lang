@@ -359,21 +359,29 @@ internal_initialize :: proc(env: ^Env) {
     append(&env.dict, Word{ label = "concat", value = proc(env: ^Env) {
         values := pop(&env.stack)
 
-        #partial switch vals in values {
-        case Quote:
-            #partial switch val in vals[0] {
-            case string:
-                internal_concat_string(env, vals)
-            case Quote:
-                internal_concat_quotes(env, vals)
-            case:
-                panic("This type cannot be concated")
-            }
+        local_env := Env{
+            dict = slice.clone_to_dynamic(env.dict[:], allocator = context.temp_allocator),
+        }
+        defer delete(local_env.stack)
+        defer delete(local_env.dict)
+        append(&local_env.stack, values)
+        eval(&local_env, Name("force"))
 
+        if len(local_env.stack) == 0 {
+            append(&env.stack, Quote({}))
             return
         }
 
-        panic("Concat expects a quote of like type concatable values")
+        #partial switch val in local_env.stack[0] {
+        case string:
+            internal_concat_string(env, local_env.stack[:])
+        case Quote:
+            internal_concat_quotes(env, local_env.stack[:])
+        case:
+            panic("This type cannot be concated")
+        }
+
+        return
     }})
 }
 

@@ -1,0 +1,11 @@
+(`` (:res :str (^str` ` ^res) concat) fold) :join
+
+(`` =) :isEmpty?
+
+(:todo -1) :length
+
+(:todo `TODO`) :reverse
+
+(:todo_len :todo_word `TODO`) :take
+
+(:todo_len :todo_word `TODO`) :drop
