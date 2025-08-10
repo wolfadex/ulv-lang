@@ -726,7 +726,15 @@ compileExpression expression =
                 "false"
 
         Ulv.Parser.Exp_String string ->
-            "string(\"" ++ string ++ "\")"
+            "string(\""
+                ++ (string
+                        -- |> Debug.log "before"
+                        |> String.replace "\n" "\\n"
+                        |> String.replace "\u{000D}" "\\r"
+                        |> String.replace "\t" "\\t"
+                    -- |> Debug.log "after"
+                   )
+                ++ "\")"
 
         Ulv.Parser.Exp_Name possiblyCommand (Ulv.Parser.Name name) ->
             case possiblyCommand of

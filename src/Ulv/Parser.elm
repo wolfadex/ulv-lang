@@ -236,9 +236,11 @@ stringHelp revChunks =
         [ Parser.succeed (\chunk -> Parser.Loop (chunk :: revChunks))
             |. Parser.token "\\"
             |= Parser.oneOf
-                [ Parser.map (\_ -> "\n") (Parser.token "n")
-                , Parser.map (\_ -> "\t") (Parser.token "t")
-                , Parser.map (\_ -> "\u{000D}") (Parser.token "r")
+                [ Parser.map (\_ -> "\\\\") (Parser.token "\\")
+                , Parser.map (\_ -> "\\\"") (Parser.token "\"")
+                , Parser.map (\_ -> "\\\n") (Parser.token "n")
+                , Parser.map (\_ -> "\\\t") (Parser.token "t")
+                , Parser.map (\_ -> "\\\u{000D}") (Parser.token "r")
                 , Parser.succeed String.fromChar
                     |. Parser.token "u{"
                     |= unicode
@@ -271,12 +273,18 @@ codeToChar : String -> Parser Char
 codeToChar str =
     let
         length =
-            String.length str
+            String.length (Debug.log "code to char" str)
+                |> Debug.log "char len"
 
         code =
             String.foldl addHex 0 str
+                |> Debug.log "code"
     in
-    if 4 <= length && length <= 6 then
+    if 4 < length || length > 6 then
+        let
+            _ =
+                Debug.log "carl" ( str, length, code )
+        in
         Parser.problem "code point must have between 4 and 6 digits"
 
     else if 0 <= code && code <= 0x0010FFFF then
