@@ -67,7 +67,21 @@ main :: proc() {"""
     }
 }
 
-internal_initialize :: proc(env: ^Env) {
+internal_initialize :: proc(env: ^Env) {"""
+        ++ (if debugMode then
+                """
+    append(&env.dict, Word{ label = "todo", value = proc(env: ^Env) {
+        message := pop(&env.stack)
+        #partial switch msg in message {
+        case string:
+            log.debug("TODO:", msg)
+        }
+    }})"""
+
+            else
+                ""
+           )
+        ++ """
     // MATH
     append(&env.dict, Word{ label = "+", value = proc(env: ^Env) {
         right := pop(&env.stack)

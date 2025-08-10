@@ -2,10 +2,15 @@
 
 (`` =) :isEmpty?
 
-(:todo -1) :length
+(`implement` todo) :length
 
-(:todo `TODO`) :reverse
+(`implement` todo) :reverse
 
-(:todo_len :todo_word `TODO`) :take
+(`implement` todo) :take
 
-(:todo_len :todo_word `TODO`) :drop
+(`implement` todo) :drop
+
+(`implement` todo) :split
+
+
+length

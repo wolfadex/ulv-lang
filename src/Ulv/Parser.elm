@@ -13,6 +13,7 @@ import Parser.Workaround
 
 type Error
     = Error String
+    | TodoInDebugMode
 
 
 type Expression
@@ -39,21 +40,21 @@ type Command
     | Push
 
 
-parse : String -> Result (List Error) (List Expression)
-parse source =
-    Parser.run parseFile source
+parse : Bool -> String -> Result (List Error) (List Expression)
+parse debugMode source =
+    Parser.run (parseFile debugMode) source
         |> Result.mapError (\err -> List.map (Debug.toString >> Error) err)
 
 
-parseFile : Parser (List Expression)
-parseFile =
+parseFile : Bool -> Parser (List Expression)
+parseFile debugMode =
     Parser.succeed identity
         |. parseSpaces
-        |= Parser.loop [] parseFileHelper
+        |= Parser.loop [] (parseFileHelper debugMode)
 
 
-parseFileHelper : List Expression -> Parser (Parser.Step (List Expression) (List Expression))
-parseFileHelper reverseExpressions =
+parseFileHelper : Bool -> List Expression -> Parser (Parser.Step (List Expression) (List Expression))
+parseFileHelper debugMode reverseExpressions =
     Parser.oneOf
         [ Parser.succeed (Parser.Done (List.reverse reverseExpressions))
             |. Parser.end
@@ -61,7 +62,7 @@ parseFileHelper reverseExpressions =
             |. parseLineComment
             |. parseSpaces
         , Parser.succeed (\expression -> Parser.Loop (expression :: reverseExpressions))
-            |= parseExpression
+            |= parseExpression debugMode
             |. parseSpaces
         ]
 
@@ -71,8 +72,8 @@ parseLineComment =
     Parser.Workaround.lineCommentAfter "#"
 
 
-parseExpression : Parser Expression
-parseExpression =
+parseExpression : Bool -> Parser Expression
+parseExpression debugMode =
     Parser.oneOf
         [ Parser.succeed Exp_Float
             |= parseFloat
@@ -85,21 +86,21 @@ parseExpression =
             |> Parser.backtrackable
         , Parser.succeed Exp_Tag
             |= parseTag
-        , parseName
+        , parseName debugMode
         , Parser.succeed Exp_Quote
-            |= parseQuote
+            |= parseQuote debugMode
         ]
 
 
-parseQuote : Parser (List Expression)
-parseQuote =
+parseQuote : Bool -> Parser (List Expression)
+parseQuote debugMode =
     Parser.succeed identity
         |. Parser.symbol "("
-        |= Parser.loop [] parseQuoteBody
+        |= Parser.loop [] (parseQuoteBody debugMode)
 
 
-parseQuoteBody : List Expression -> Parser (Parser.Step (List Expression) (List Expression))
-parseQuoteBody reverseExpressions =
+parseQuoteBody : Bool -> List Expression -> Parser (Parser.Step (List Expression) (List Expression))
+parseQuoteBody debugMode reverseExpressions =
     Parser.oneOf
         [ Parser.succeed (Parser.Done (List.reverse reverseExpressions))
             |. Parser.symbol ")"
@@ -107,7 +108,7 @@ parseQuoteBody reverseExpressions =
             |. parseLineComment
             |. parseSpaces
         , Parser.succeed (\expression -> Parser.Loop (expression :: reverseExpressions))
-            |= Parser.lazy (\() -> parseExpression)
+            |= Parser.lazy (\() -> parseExpression debugMode)
             |. parseSpaces
         ]
 
@@ -160,15 +161,15 @@ parseFloat =
         |> Parser.backtrackable
 
 
-parseName : Parser Expression
-parseName =
+parseName : Bool -> Parser Expression
+parseName debugMode =
     Parser.succeed Exp_Name
         |= Parser.oneOf
             [ Parser.succeed Just
                 |= parseCommand
             , Parser.succeed Nothing
             ]
-        |= parseNameHelper
+        |= parseNameHelper debugMode
 
 
 parseCommand : Parser Command
@@ -181,8 +182,8 @@ parseCommand =
         ]
 
 
-parseNameHelper : Parser Name
-parseNameHelper =
+parseNameHelper : Bool -> Parser Name
+parseNameHelper debugMode =
     Parser.succeed ()
         |. Parser.chompIf
             (\char ->
@@ -204,7 +205,14 @@ parseNameHelper =
                     || (char == '!')
             )
         |> Parser.getChompedString
-        |> Parser.map Name
+        |> Parser.andThen
+            (\name ->
+                if not debugMode && name == "todo" then
+                    Parser.problem "todo is only allowed in debug mode"
+
+                else
+                    Parser.succeed (Name name)
+            )
 
 
 parseTag : Parser Tag

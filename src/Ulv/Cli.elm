@@ -18,7 +18,7 @@ run =
                 |> BackendTask.allowFatal
                 |> BackendTask.andThen
                     (\entryFileContent ->
-                        case Ulv.Parser.parse entryFileContent of
+                        case Ulv.Parser.parse debugMode entryFileContent of
                             Err errors ->
                                 Pages.Script.log (Debug.toString errors)
 
