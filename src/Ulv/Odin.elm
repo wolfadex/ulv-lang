@@ -732,6 +732,7 @@ compileExpression expression =
                         |> String.replace "\n" "\\n"
                         |> String.replace "\u{000D}" "\\r"
                         |> String.replace "\t" "\\t"
+                        |> String.replace "\"" "\\\""
                     -- |> Debug.log "after"
                    )
                 ++ "\")"

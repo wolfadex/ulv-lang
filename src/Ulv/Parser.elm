@@ -226,7 +226,7 @@ parseSpaces =
 parseString : Parser String
 parseString =
     Parser.succeed identity
-        |. Parser.token "\""
+        |. Parser.token "`"
         |= Parser.loop [] stringHelp
 
 
@@ -237,7 +237,7 @@ stringHelp revChunks =
             |. Parser.token "\\"
             |= Parser.oneOf
                 [ Parser.map (\_ -> "\\\\") (Parser.token "\\")
-                , Parser.map (\_ -> "\\\"") (Parser.token "\"")
+                , Parser.map (\_ -> "`") (Parser.token "`")
                 , Parser.map (\_ -> "\\\n") (Parser.token "n")
                 , Parser.map (\_ -> "\\\t") (Parser.token "t")
                 , Parser.map (\_ -> "\\\u{000D}") (Parser.token "r")
@@ -246,7 +246,7 @@ stringHelp revChunks =
                     |= unicode
                     |. Parser.token "}"
                 ]
-        , Parser.token "\""
+        , Parser.token "`"
             |> Parser.map (\_ -> Parser.Done (String.join "" (List.reverse revChunks)))
         , Parser.chompWhile isUninteresting
             |> Parser.getChompedString
@@ -256,7 +256,7 @@ stringHelp revChunks =
 
 isUninteresting : Char -> Bool
 isUninteresting char =
-    char /= '\\' && char /= '"'
+    char /= '\\' && char /= '`'
 
 
 

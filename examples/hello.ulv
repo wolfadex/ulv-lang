@@ -1,5 +1,5 @@
 # math
-"math:" print
+`math:` print
 
 2 3 +
 print
@@ -27,27 +27,39 @@ print
 
 # boolean logic
 
-"
-booleans:" print
+`
+booleans:` print
 True False and print
 True False or print
 False not print
 
 # strings
-"
-strings:" print
+`
+strings:` print
 
-"your average string" print
-"some langs require \n for newlines, in Ulv you just
-move things to the next line" print
-"same with \t, just		use tabs" print
-"You do still need to escape \" though like so \\\"" print
-"and \\ need to be escaped with an extra \\\\" print
-"unicode like ⏻ can be written as \\u{23FB}" print
+`your average string` print
+`some langs require \n for newlines, in Ulv you just
+move things to the next line` print
+`same with \t, just		use tabs` print
+`strings use \` to start and end` print
+`so you need to escape \` like so \\\`` print
+`and \\ needs to be escaped with an extra \\\\` print
+`unicode like ⏻ can be written as \\u{23FB}` print
 
 # quotes and naming
-"
-quotes and naming:"
-(:name ("Hello, " name "!") concat print) :greet
 
-"Wolfgang" greet
+`
+quotes and naming:` print
+`sometimes you want to join many strings, so you write them like so (\`Hello, \` \`World!\`)` print
+`Then you use 'concat' to join your strings together` print
+
+`you name with :word` print
+`e.g. 5 :five associates the value 5 with the word "five"` print
+`you can then write five in place of the number 5 from that point forward` print
+
+`
+say you want to greet someone, you can write
+(:name (\`Hello, \` name \`!\`) concat print) :greet` print
+(:name (`Hello, ` name `!`) concat print) :greet
+`and then you can use it like so \`Wolfgang\` greet` print
+`Wolfgang` greet
