@@ -1,9 +1,10 @@
 module Ulv.Odin exposing (compile)
 
+import Ulv.Canonical
 import Ulv.Parser
 
 
-compile : Bool -> List Ulv.Parser.Expression -> String
+compile : Bool -> List Ulv.Canonical.Expression -> String
 compile debugMode expressions =
     """package ulv
 
@@ -356,20 +357,6 @@ internal_initialize :: proc(env: ^Env) {"""
 
         panic("Fold expects 2 quotes and an initial value")
     }})
-    append(&env.dict, Word{ label = "reverse", value = proc(env: ^Env) {
-        value := pop(&env.stack)
-
-        #partial switch val in value {
-        case Quote:
-            rev := val[:]
-            slice.reverse(rev)
-
-            append(&env.stack, rev)
-            return
-        }
-
-        panic("Reverse expects a quote")
-    }})
     append(&env.dict, Word{ label = "concat", value = proc(env: ^Env) {
         values := pop(&env.stack)
 
@@ -610,6 +597,8 @@ eval :: proc(env: ^Env, value: Value) {
         append(&env.stack, v)
     case Command:
         switch v.cmd {
+        case .Drop:
+            pop(&env.stack)
         case .Assign:
             named_value := pop(&env.stack)
             append(&env.dict, Word{label = v.name, value = named_value})
@@ -661,6 +650,8 @@ value_to_print_string :: proc(value: Value) -> (str: string) {
         str = string(v)
     case Command:
         switch v.cmd {
+        case .Drop:
+            str = ":_"
         case .Assign:
             str = fmt.aprintf(":%s", v.name, allocator = context.temp_allocator)
         case .Push:
@@ -700,6 +691,7 @@ Command :: struct {
 
 Command_Type :: enum {
     Assign,
+    Drop,
     Push,
 }
 
@@ -722,67 +714,118 @@ compiled_values : []Value = {
 }
 
 """
+        ++ compileInternals expressions
 
 
-compileExpressions : List Ulv.Parser.Expression -> String
+compileExpressions : List Ulv.Canonical.Expression -> String
 compileExpressions expressions =
     expressions
-        |> List.map compileExpression
+        |> List.filterMap compileExpression
         |> String.join ", "
 
 
-compileExpression : Ulv.Parser.Expression -> String
+compileExpression : Ulv.Canonical.Expression -> Maybe String
 compileExpression expression =
     case expression of
-        Ulv.Parser.Exp_Integer int ->
-            "int(" ++ String.fromInt int ++ ")"
+        Ulv.Canonical.Exp_Integer int ->
+            Just <| "int(" ++ String.fromInt int ++ ")"
 
-        Ulv.Parser.Exp_Float float ->
-            "f64(" ++ String.fromFloat float ++ ")"
+        Ulv.Canonical.Exp_Float float ->
+            Just <| "f64(" ++ String.fromFloat float ++ ")"
 
-        Ulv.Parser.Exp_Boolean bool ->
-            if bool then
-                "true"
+        Ulv.Canonical.Exp_Boolean bool ->
+            Just <|
+                if bool then
+                    "true"
 
-            else
-                "false"
+                else
+                    "false"
 
-        Ulv.Parser.Exp_String string ->
-            "string(\""
-                ++ (string
-                        -- |> Debug.log "before"
-                        |> String.replace "\n" "\\n"
-                        |> String.replace "\u{000D}" "\\r"
-                        |> String.replace "\t" "\\t"
-                        |> String.replace "\"" "\\\""
-                    -- |> Debug.log "after"
-                   )
-                ++ "\")"
+        Ulv.Canonical.Exp_String string ->
+            Just <|
+                "string(\""
+                    ++ (string
+                            -- |> Debug.log "before"
+                            |> String.replace "\n" "\\n"
+                            |> String.replace "\u{000D}" "\\r"
+                            |> String.replace "\t" "\\t"
+                            |> String.replace "\"" "\\\""
+                        -- |> Debug.log "after"
+                       )
+                    ++ "\")"
 
-        Ulv.Parser.Exp_Name possiblyCommand (Ulv.Parser.Name name) ->
-            case possiblyCommand of
-                Nothing ->
-                    "Name(\"" ++ name ++ "\")"
+        Ulv.Canonical.Exp_Name (Ulv.Parser.Name name) ->
+            Just <| "Name(\"" ++ name ++ "\")"
 
-                Just command ->
-                    compileCommand name command
+        Ulv.Canonical.Exp_Assign (Ulv.Parser.Name name) ->
+            Just <| "Command{name = Name(\"" ++ name ++ "\"), cmd = .Assign}"
 
-        Ulv.Parser.Exp_Quote body ->
-            "Quote({" ++ compileExpressions body ++ "})"
+        Ulv.Canonical.Exp_Drop ->
+            Just <| "Command{name = Name(\"_\"), cmd = .Drop}"
 
-        Ulv.Parser.Exp_Tag (Ulv.Parser.Tag tag) ->
-            "Tag(\"" ++ tag ++ "\")"
+        Ulv.Canonical.Exp_Push (Ulv.Parser.Name name) ->
+            Just <| "Command{name = Name(\"" ++ name ++ "\"), cmd = .Push}"
+
+        Ulv.Canonical.Exp_Quote body ->
+            Just <| "Quote({" ++ compileExpressions body ++ "})"
+
+        Ulv.Canonical.Exp_Tag (Ulv.Parser.Tag tag) ->
+            Just <| "Tag(\"" ++ tag ++ "\")"
+
+        Ulv.Canonical.Exp_Comment _ ->
+            Nothing
+
+        Ulv.Canonical.Exp_InternalInline internal ->
+            case String.split " :: " internal of
+                name :: _ ->
+                    Just ("Internal(" ++ name ++ ")")
+
+                _ ->
+                    Nothing
 
 
-compileCommand : String -> Ulv.Parser.Command -> String
-compileCommand name command =
-    let
-        commandStr =
-            case command of
-                Ulv.Parser.Assign ->
-                    ".Assign"
+compileInternals : List Ulv.Canonical.Expression -> String
+compileInternals expressions =
+    expressions
+        |> List.concatMap compileInternal
+        |> String.join "\n"
 
-                Ulv.Parser.Push ->
-                    ".Push"
-    in
-    "Command{name = Name(\"" ++ name ++ "\"), cmd = " ++ commandStr ++ "}"
+
+compileInternal : Ulv.Canonical.Expression -> List String
+compileInternal expression =
+    case expression of
+        Ulv.Canonical.Exp_Integer _ ->
+            []
+
+        Ulv.Canonical.Exp_Float _ ->
+            []
+
+        Ulv.Canonical.Exp_Boolean _ ->
+            []
+
+        Ulv.Canonical.Exp_String _ ->
+            []
+
+        Ulv.Canonical.Exp_Name _ ->
+            []
+
+        Ulv.Canonical.Exp_Assign _ ->
+            []
+
+        Ulv.Canonical.Exp_Drop ->
+            []
+
+        Ulv.Canonical.Exp_Push _ ->
+            []
+
+        Ulv.Canonical.Exp_Quote body ->
+            List.concatMap compileInternal body
+
+        Ulv.Canonical.Exp_Tag _ ->
+            []
+
+        Ulv.Canonical.Exp_Comment _ ->
+            []
+
+        Ulv.Canonical.Exp_InternalInline internal ->
+            [ internal ]

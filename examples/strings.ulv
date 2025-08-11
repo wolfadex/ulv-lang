@@ -2,9 +2,7 @@
 
 (`` =) :isEmpty?
 
-(`implement` todo) :length
 
-(`implement` todo) :reverse
 
 (`implement` todo) :take
 

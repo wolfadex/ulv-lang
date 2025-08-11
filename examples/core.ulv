@@ -1,0 +1,38 @@
+
+length: (#{
+internal__core__length :: proc(env: ^Env) {
+  value := pop(&env.stack)
+
+  #partial switch val in value {
+  case string:
+    append(&env.stack, len(val))
+  case Quote:
+    append(&env.stack, len(val))
+  case:
+    panic("Cannot get the length of this value")
+  }
+}
+}#)
+
+
+reverse: (#{
+internal__core__reverse :: proc(env: ^Env) {
+  value := pop(&env.stack)
+
+  #partial switch val in value {
+  case string:
+    rev_str, _ := strings.reverse(val, allocator = context.temp_allocator)
+    append(&env.stack, rev_str)
+  case Quote:
+    slice.reverse(val)
+    append(&env.stack, val)
+  case:
+    panic("Cannot get the length of this value")
+  }
+}
+}#)
+
+
+(:x ^x ^x) :dup
+
+`carl` dup reverse print print
