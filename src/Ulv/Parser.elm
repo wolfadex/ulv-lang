@@ -2,16 +2,16 @@ module Ulv.Parser exposing
     ( Context(..)
     , DeadEnd
     , Expression(..)
-    , Name(..)
+    , Module
+    , NameSource(..)
     , Problem(..)
-    , Tag(..)
     , parse
     )
 
 import Html.Attributes exposing (name)
-import Parser
 import Parser.Advanced exposing ((|.), (|=), DeadEnd)
 import Parser.Advanced.Workaround
+import Ulv.Common
 
 
 type alias Parser a =
@@ -20,6 +20,9 @@ type alias Parser a =
 
 type Context
     = Ctx_File String
+    | Ctx_Includes
+    | Ctx_IncludePath
+    | Ctx_IncludeAlias
     | Ctx_Expression
     | Ctx_Integer
     | Ctx_Float
@@ -32,6 +35,7 @@ type Context
     | Ctx_ForwardAssign
     | Ctx_Push
     | Ctx_Comment
+    | Ctx_DocComment
     | Ctx_InternalInline
     | Ctx_Tag
 
@@ -51,6 +55,8 @@ type Problem
     | Expect_Float String
     | Expect_CodePointLength Int String
     | Expect_CodePointSize String
+    | Expect_StringBadQuote
+    | Expect_SingleNameForwardAssign
 
 
 type Expression
@@ -59,36 +65,94 @@ type Expression
     | Exp_Boolean Bool
     | Exp_String String
     | Exp_Quote (List Expression)
-    | Exp_Name Name
-    | Exp_Assign Name
+    | Exp_Name NameSource Ulv.Common.Name
+    | Exp_Assign Ulv.Common.Name
     | Exp_Drop
-    | Exp_ForwardAssign Name
-    | Exp_Push Name
+    | Exp_ForwardAssign Ulv.Common.Name
+    | Exp_Push NameSource Ulv.Common.Name
     | Exp_Comment String
+    | Exp_DocComment String
     | Exp_InternalInline String
-    | Exp_Tag Tag
+    | Exp_Tag Ulv.Common.Tag
+    | Exp_FileInclude (List Ulv.Common.Include)
 
 
-type Name
-    = Name String
+type NameSource
+    = BuiltIn
+    | LocalSource
+    | ExternalSource Ulv.Common.Name
 
 
-type Tag
-    = Tag String
+type alias Module =
+    { includes : List Ulv.Common.Include
+    , body : List Expression
+    }
 
 
-parse : Bool -> String -> String -> Result ( String, List DeadEnd ) (List Expression)
+parse : Bool -> String -> String -> Result ( String, List DeadEnd ) Module
 parse debugMode filePath source =
     Parser.Advanced.run (parseFile debugMode filePath) source
         |> Result.mapError (Tuple.pair source)
 
 
-parseFile : Bool -> String -> Parser (List Expression)
+parseFile : Bool -> String -> Parser Module
 parseFile debugMode filePath =
-    Parser.Advanced.succeed identity
+    Parser.Advanced.succeed Module
+        |. parseSpaces
+        |= Parser.Advanced.oneOf
+            [ Parser.Advanced.succeed identity
+                |. symbol "["
+                |. parseSpaces
+                |= Parser.Advanced.loop [] (includesHelp debugMode)
+                |> Parser.Advanced.inContext Ctx_Includes
+            , Parser.Advanced.succeed []
+            ]
         |. parseSpaces
         |= Parser.Advanced.loop [] (parseFileHelper debugMode)
         |> Parser.Advanced.inContext (Ctx_File filePath)
+
+
+includesHelp : Bool -> List Ulv.Common.Include -> Parser (Parser.Advanced.Step (List Ulv.Common.Include) (List Ulv.Common.Include))
+includesHelp debugMode reverseIncludes =
+    Parser.Advanced.oneOf
+        [ Parser.Advanced.succeed (Parser.Advanced.Done (List.reverse reverseIncludes))
+            |. symbol "]"
+        , Parser.Advanced.succeed
+            (\((Ulv.Common.Path p) as path) maybeAlias ->
+                Parser.Advanced.Loop <|
+                    case maybeAlias of
+                        Just alias_ ->
+                            ( path, alias_ ) :: reverseIncludes
+
+                        Nothing ->
+                            case p |> String.split "/" |> List.reverse of
+                                [] ->
+                                    Debug.todo "not sure what to do here, yet"
+
+                                defaultName :: _ ->
+                                    ( path, Ulv.Common.Name defaultName ) :: reverseIncludes
+            )
+            |= parsePath
+            |. parseSpaces
+            |= Parser.Advanced.oneOf
+                [ Parser.Advanced.succeed Just
+                    |. symbol ":"
+                    |= parseNamePart debugMode
+                    |> Parser.Advanced.inContext Ctx_IncludeAlias
+                , Parser.Advanced.succeed Nothing
+                ]
+            |. parseSpaces
+        ]
+
+
+parsePath : Parser Ulv.Common.Path
+parsePath =
+    Parser.Advanced.succeed ()
+        |. chompIf (\char -> (char /= ' ') && (char /= '\t') && (char /= '\n') && (char /= '\u{000D}'))
+        |. Parser.Advanced.chompWhile (\char -> (char /= ' ') && (char /= '\t') && (char /= '\n') && (char /= '\u{000D}'))
+        |> Parser.Advanced.getChompedString
+        |> Parser.Advanced.map Ulv.Common.Path
+        |> Parser.Advanced.inContext Ctx_IncludePath
 
 
 parseFileHelper : Bool -> List Expression -> Parser (Parser.Advanced.Step (List Expression) (List Expression))
@@ -107,22 +171,29 @@ parseFileHelper debugMode reverseExpressions =
 
 parseComment : Parser Expression
 parseComment =
-    Parser.Advanced.oneOf
-        [ Parser.Advanced.succeed Exp_InternalInline
-            |. token "#{"
-            |= (chompUntilEndOrBefore "}#"
-                    |> Parser.Advanced.getChompedString
-                    |> Parser.Advanced.map String.trim
-               )
-            |. token "}#"
-            |> Parser.Advanced.inContext Ctx_InternalInline
-        , Parser.Advanced.succeed Exp_Comment
-            |. token "#"
-            |= (chompUntilEndOrAfter "\n"
-                    |> Parser.Advanced.getChompedString
-               )
-            |> Parser.Advanced.inContext Ctx_Comment
-        ]
+    Parser.Advanced.succeed identity
+        |. token "#"
+        |= Parser.Advanced.oneOf
+            [ Parser.Advanced.succeed Exp_InternalInline
+                |. token "{"
+                |= (chompUntilEndOrBefore "}#"
+                        |> Parser.Advanced.getChompedString
+                        |> Parser.Advanced.map String.trim
+                   )
+                |. token "}#"
+                |> Parser.Advanced.inContext Ctx_InternalInline
+            , Parser.Advanced.succeed Exp_DocComment
+                |. token "|"
+                |= (chompUntilEndOrAfter "\n"
+                        |> Parser.Advanced.getChompedString
+                   )
+                |> Parser.Advanced.inContext Ctx_DocComment
+            , Parser.Advanced.succeed Exp_Comment
+                |= (chompUntilEndOrAfter "\n"
+                        |> Parser.Advanced.getChompedString
+                   )
+                |> Parser.Advanced.inContext Ctx_Comment
+            ]
 
 
 parseExpression : Bool -> Parser Expression
@@ -139,7 +210,7 @@ parseExpression debugMode =
             |> Parser.Advanced.backtrackable
         , Parser.Advanced.succeed Exp_Tag
             |= parseTag
-        , parseName debugMode
+        , parseNameLikeValue debugMode
         , Parser.Advanced.succeed Exp_Quote
             |= parseQuote debugMode
         ]
@@ -150,6 +221,7 @@ parseQuote : Bool -> Parser (List Expression)
 parseQuote debugMode =
     Parser.Advanced.succeed identity
         |. symbol "("
+        |. parseSpaces
         |= Parser.Advanced.loop [] (parseQuoteBody debugMode)
         |> Parser.Advanced.inContext Ctx_Quote
 
@@ -219,45 +291,120 @@ parseFloat =
         |> Parser.Advanced.inContext Ctx_Float
 
 
-parseName : Bool -> Parser Expression
-parseName debugMode =
+builtInNames : List Ulv.Common.Name
+builtInNames =
+    List.map Ulv.Common.Name
+        [ "+"
+        , "-"
+        , "*"
+        , "/"
+        , "todo"
+        , "="
+        , "and"
+        , "or"
+        , "not"
+        , "if"
+        , ">"
+        , ">="
+        , "<"
+        , "<="
+        , "compare"
+        , "print"
+        , "stack"
+        , "force"
+        , "map"
+        , "fold"
+        , "concat"
+        ]
+
+
+parseNameLikeValue : Bool -> Parser Expression
+parseNameLikeValue debugMode =
     Parser.Advanced.oneOf
         [ Parser.Advanced.succeed Exp_Drop
             |. symbol ":_"
             |. Parser.Advanced.oneOf
-                [ parseNameHelper debugMode
-                , Parser.Advanced.succeed (Name "")
+                [ parseNamePart debugMode
+                , Parser.Advanced.succeed (Ulv.Common.Name "")
                 ]
             |> Parser.Advanced.inContext Ctx_Drop
         , Parser.Advanced.succeed Exp_Assign
             |. symbol ":"
-            |= parseNameHelper debugMode
+            |= parseNamePart debugMode
             |> Parser.Advanced.inContext Ctx_Assign
-        , Parser.Advanced.succeed Exp_Push
-            |. symbol "^"
-            |= parseNameHelper debugMode
-            |> Parser.Advanced.inContext Ctx_Push
         , Parser.Advanced.succeed
-            (\name isForwardAssign ->
-                if isForwardAssign then
-                    Exp_ForwardAssign name
+            (\( name, maybeName ) ->
+                case maybeName of
+                    Nothing ->
+                        let
+                            nameSource =
+                                if List.member name builtInNames then
+                                    BuiltIn
 
-                else
-                    Exp_Name name
+                                else
+                                    LocalSource
+                        in
+                        Exp_Push nameSource name
+
+                    Just actualName ->
+                        Exp_Push (ExternalSource name) actualName
             )
-            |= parseNameHelper debugMode
+            |. symbol "^"
+            |= parseName debugMode
+            |> Parser.Advanced.inContext Ctx_Push
+        , Parser.Advanced.succeed Tuple.pair
+            |= parseName debugMode
             |= Parser.Advanced.oneOf
                 [ Parser.Advanced.succeed True
                     |. symbol ":"
                     |> Parser.Advanced.inContext Ctx_ForwardAssign
                 , Parser.Advanced.succeed False
                 ]
+            |> Parser.Advanced.andThen
+                (\( ( name, maybeName ), isForwardAssign ) ->
+                    if isForwardAssign then
+                        case maybeName of
+                            Nothing ->
+                                Parser.Advanced.succeed (Exp_ForwardAssign name)
+
+                            Just _ ->
+                                Parser.Advanced.problem Expect_SingleNameForwardAssign
+
+                    else
+                        Parser.Advanced.succeed <|
+                            case maybeName of
+                                Nothing ->
+                                    let
+                                        nameSource =
+                                            if List.member name builtInNames then
+                                                BuiltIn
+
+                                            else
+                                                LocalSource
+                                    in
+                                    Exp_Name nameSource name
+
+                                Just actualName ->
+                                    Exp_Name (ExternalSource name) actualName
+                )
             |> Parser.Advanced.inContext Ctx_Name
         ]
 
 
-parseNameHelper : Bool -> Parser Name
-parseNameHelper debugMode =
+parseName : Bool -> Parser ( Ulv.Common.Name, Maybe Ulv.Common.Name )
+parseName debugMode =
+    Parser.Advanced.succeed Tuple.pair
+        |= parseNamePart debugMode
+        |= Parser.Advanced.oneOf
+            [ Parser.Advanced.succeed Just
+                |. token "."
+                |= parseNamePart debugMode
+            , Parser.Advanced.succeed Nothing
+            ]
+
+
+parseNamePart : Bool -> Parser Ulv.Common.Name
+parseNamePart debugMode =
     Parser.Advanced.succeed ()
         |. chompIf
             (\char ->
@@ -285,17 +432,17 @@ parseNameHelper debugMode =
                     Parser.Advanced.problem TodoInDebugMode
 
                 else
-                    Parser.Advanced.succeed (Name name)
+                    Parser.Advanced.succeed (Ulv.Common.Name name)
             )
 
 
-parseTag : Parser Tag
+parseTag : Parser Ulv.Common.Tag
 parseTag =
     Parser.Advanced.succeed ()
         |. chompIf (\char -> char == '@')
         |. Parser.Advanced.chompWhile (\char -> Char.isAlphaNum char || (char == '_') || (char == '-'))
         |> Parser.Advanced.getChompedString
-        |> Parser.Advanced.map Tag
+        |> Parser.Advanced.map Ulv.Common.Tag
         |> Parser.Advanced.inContext Ctx_Tag
 
 
@@ -315,10 +462,16 @@ parseSpaces =
 
 parseString : Parser String
 parseString =
-    Parser.Advanced.succeed identity
-        |. token "`"
-        |= Parser.Advanced.loop [] stringHelp
-        |> Parser.Advanced.inContext Ctx_String
+    Parser.Advanced.oneOf
+        [ Parser.Advanced.succeed identity
+            |. token "`"
+            |= Parser.Advanced.loop [] stringHelp
+            |> Parser.Advanced.inContext Ctx_String
+        , Parser.Advanced.succeed ()
+            |. token "\""
+            |> Parser.Advanced.andThen
+                (\_ -> Parser.Advanced.problem Expect_StringBadQuote)
+        ]
 
 
 stringHelp : List String -> Parser (Parser.Advanced.Step (List String) String)

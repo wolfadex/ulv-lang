@@ -1,0 +1,9 @@
+[
+./core
+./io
+]
+
+
+main: (5 6 +)
+# `../advent_of_code/2020/day01.txt` io.readFile
+# stack print

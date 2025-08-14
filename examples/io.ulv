@@ -1,0 +1,15 @@
+# For things like reading/writing files and such
+
+readFile: (#{
+internal__io__read_file :: proc(env: ^Env) {
+  value := pop(&env.stack)
+
+  #partial switch val in value {
+  case string:
+
+    append(&env.stack, len(val))
+  case:
+    panic("Expected a string for a file path")
+  }
+}
+}#)

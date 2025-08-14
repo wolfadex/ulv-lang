@@ -1,11 +1,11 @@
 module Ulv.Odin exposing (compile)
 
 import Ulv.Canonical
-import Ulv.Parser
+import Ulv.Common
 
 
-compile : Bool -> List Ulv.Canonical.Expression -> String
-compile debugMode expressions =
+compile : Bool -> List ( Ulv.Common.Path, Ulv.Canonical.Definition ) -> String
+compile debugMode definitions =
     """package ulv
 
 import "core:fmt"
@@ -707,14 +707,272 @@ find_named :: proc(dict: ^[dynamic]Word, label: Name) -> (w: Word, found: bool) 
     return
 }
 
-compiled_values : []Value = {
+compiled_values : []Value = {}
 """
-        ++ compileExpressions expressions
-        ++ """
-}
+        ++ compileDefinitions definitions
+        -- ++ compileInternals expressions
+        ++ "// TODO - compile internals"
 
-"""
-        ++ compileInternals expressions
+
+compileDefinitions : List ( Ulv.Common.Path, Ulv.Canonical.Definition ) -> String
+compileDefinitions definitions =
+    definitions
+        |> List.map compileDefinition
+        |> String.join "\n\n"
+
+
+compileDefinition : ( Ulv.Common.Path, Ulv.Canonical.Definition ) -> String
+compileDefinition ( srcPath, definition ) =
+    let
+        doc =
+            case definition.docComment of
+                Nothing ->
+                    ""
+
+                Just docComment ->
+                    docComment
+                        |> String.split "\n"
+                        |> List.map (\line -> "\\\\ " ++ line)
+                        |> String.join "\n"
+    in
+    doc ++ "\n" ++ compileName (Ulv.Canonical.ExternalSource srcPath) definition.name ++ compileDefinitionBody definition.body
+
+
+compileDefinitionBody : Ulv.Canonical.Expression -> String
+compileDefinitionBody expression =
+    case expression of
+        Ulv.Canonical.Exp_Integer int ->
+            " : int = " ++ String.fromInt int
+
+        Ulv.Canonical.Exp_Float float ->
+            " : f64 = " ++ String.fromFloat float
+
+        Ulv.Canonical.Exp_Boolean bool ->
+            " : bool = " ++ compileBoolean bool
+
+        Ulv.Canonical.Exp_String string ->
+            " : string = " ++ compileString string
+
+        Ulv.Canonical.Exp_Quote body ->
+            " :: proc(env: ^Env) {\n" ++ compileBodyExpressions 0 1 body ++ "\n}"
+
+        Ulv.Canonical.Exp_Name nameSource (Ulv.Common.Name name) ->
+            "// :: " ++ "TODO - name"
+
+        Ulv.Canonical.Exp_Assign (Ulv.Common.Name name) ->
+            "// TODO - assign"
+
+        Ulv.Canonical.Exp_Drop ->
+            "// TODO - drop, error?"
+
+        Ulv.Canonical.Exp_Push nameSource (Ulv.Common.Name name) ->
+            "// TODO - push, error?"
+
+        Ulv.Canonical.Exp_InternalInline string ->
+            "// TODO - inline, ???"
+
+        Ulv.Canonical.Exp_Tag (Ulv.Common.Tag tag) ->
+            "// TODO - tag, ???"
+
+
+compileString : String -> String
+compileString str =
+    "\""
+        ++ (str
+                |> String.replace "\n" "\\n"
+                |> String.replace "\u{000D}" "\\r"
+                |> String.replace "\t" "\\t"
+                |> String.replace "\"" "\\\""
+           )
+        ++ "\""
+
+
+compileBoolean : Bool -> String
+compileBoolean bool =
+    if bool then
+        "true"
+
+    else
+        "false"
+
+
+compileVariableName : Int -> String
+compileVariableName code =
+    let
+        char =
+            String.fromChar (Char.fromCode (remainderBy 26 code + 97))
+    in
+    if code // 26 > 0 then
+        compileVariableName (code // 26) ++ char
+
+    else
+        char
+
+
+compileBodyExpressions : Int -> Int -> List Ulv.Canonical.Expression -> String
+compileBodyExpressions nextVariableId indentationDpeth expressions =
+    expressions
+        |> List.foldl
+            (\expression ( exprs, nextVar ) ->
+                let
+                    ( expr, nextV ) =
+                        compileBodyExpression nextVar indentationDpeth expression
+                in
+                ( expr :: exprs
+                , nextV
+                )
+            )
+            ( [], nextVariableId )
+        |> Tuple.first
+        |> List.reverse
+        |> String.join "\n"
+
+
+compileBodyExpression : Int -> Int -> Ulv.Canonical.Expression -> ( String, Int )
+compileBodyExpression nextVariableId indentationDpeth expression =
+    let
+        indentationPadding =
+            String.repeat (indentationDpeth * 2) " "
+    in
+    case expression of
+        Ulv.Canonical.Exp_Integer int ->
+            ( indentationPadding ++ "append(&env.stack, int(" ++ String.fromInt int ++ "))"
+            , nextVariableId
+            )
+
+        Ulv.Canonical.Exp_Float float ->
+            ( indentationPadding ++ "append(&env.stack, f64(" ++ String.fromFloat float ++ "))"
+            , nextVariableId
+            )
+
+        Ulv.Canonical.Exp_Boolean bool ->
+            ( indentationPadding ++ "append(&env.stack, " ++ compileBoolean bool ++ ")"
+            , nextVariableId
+            )
+
+        Ulv.Canonical.Exp_String string ->
+            ( indentationPadding ++ "append(&env.stack, " ++ compileString string ++ ")"
+            , nextVariableId
+            )
+
+        Ulv.Canonical.Exp_Quote _ ->
+            case compileExpression expression of
+                Nothing ->
+                    ( ""
+                    , nextVariableId
+                    )
+
+                Just compiledQuote ->
+                    ( indentationPadding ++ "append(&env.stack, " ++ compiledQuote ++ ")"
+                    , nextVariableId
+                    )
+
+        Ulv.Canonical.Exp_Name nameSource name ->
+            let
+                varName =
+                    compileVariableName nextVariableId
+
+                compName =
+                    compileName nameSource name
+            in
+            ( [ varName ++ ", found := find_named(&env.dict, \"" ++ compName ++ "\")"
+              , "if found {"
+              , "  #partial switch nv in " ++ varName ++ ".value {"
+              , "  case Quote:"
+              , "    for w in nv {"
+              , "      eval(env, w)"
+              , "    }"
+              , "  case:"
+              , "    eval(env, " ++ varName ++ ".value)"
+              , "  }"
+              , "} else {"
+              , "  panic(\"Unknown word! " ++ compName ++ "\")"
+              , "}"
+              ]
+                |> List.map (\line -> indentationPadding ++ line)
+                |> String.join "\n"
+            , nextVariableId + 1
+            )
+
+        Ulv.Canonical.Exp_Assign (Ulv.Common.Name name) ->
+            let
+                varName =
+                    compileVariableName nextVariableId
+            in
+            ( [ varName ++ " := pop(&env.stack)"
+              , "append(&env.dict, Word{label = \"" ++ name ++ "\", value = " ++ varName ++ "})"
+              ]
+                |> List.map (\line -> indentationPadding ++ line)
+                |> String.join "\n"
+            , nextVariableId + 1
+            )
+
+        Ulv.Canonical.Exp_Drop ->
+            ( "_ = pop(&env.stack)"
+            , nextVariableId
+            )
+
+        Ulv.Canonical.Exp_Push nameSource name ->
+            let
+                varName =
+                    compileVariableName nextVariableId
+
+                compName =
+                    compileName nameSource name
+            in
+            ( [ varName ++ ", found := find_named(&env.dict, \"" ++ compName ++ "\")"
+              , "if found {"
+              , "    append(&env.stack, " ++ varName ++ ".value)"
+              , "} else {"
+              , "    panic(\"Unknown word! compName\")"
+              , "}"
+              ]
+                |> List.map (\line -> indentationPadding ++ line)
+                |> String.join "\n"
+            , nextVariableId + 1
+            )
+
+        Ulv.Canonical.Exp_InternalInline internal ->
+            case String.split " :: " internal of
+                name :: _ ->
+                    ( indentationPadding ++ name ++ "(env)"
+                    , nextVariableId
+                    )
+
+                _ ->
+                    ( ""
+                    , nextVariableId
+                    )
+
+        Ulv.Canonical.Exp_Tag (Ulv.Common.Tag tag) ->
+            ( indentationPadding ++ "append(&env.stack, Tag(\"" ++ tag ++ "\"))"
+            , nextVariableId
+            )
+
+
+compileName : Ulv.Canonical.NameSource -> Ulv.Common.Name -> String
+compileName nameSource (Ulv.Common.Name name) =
+    case nameSource of
+        Ulv.Canonical.BuiltIn ->
+            name
+
+        Ulv.Canonical.LocalSource ->
+            name
+
+        Ulv.Canonical.ExternalSource (Ulv.Common.Path path) ->
+            (path
+                |> (\p ->
+                        if String.startsWith "./" p then
+                            String.dropLeft 2 p
+
+                        else
+                            p
+                   )
+                |> String.replace ".ulv" ""
+                |> String.replace "/" "_"
+            )
+                ++ "__"
+                ++ name
 
 
 compileExpressions : List Ulv.Canonical.Expression -> String
@@ -734,46 +992,28 @@ compileExpression expression =
             Just <| "f64(" ++ String.fromFloat float ++ ")"
 
         Ulv.Canonical.Exp_Boolean bool ->
-            Just <|
-                if bool then
-                    "true"
-
-                else
-                    "false"
+            Just <| compileBoolean bool
 
         Ulv.Canonical.Exp_String string ->
-            Just <|
-                "string(\""
-                    ++ (string
-                            -- |> Debug.log "before"
-                            |> String.replace "\n" "\\n"
-                            |> String.replace "\u{000D}" "\\r"
-                            |> String.replace "\t" "\\t"
-                            |> String.replace "\"" "\\\""
-                        -- |> Debug.log "after"
-                       )
-                    ++ "\")"
+            Just <| "string(" ++ compileString string ++ ")"
 
-        Ulv.Canonical.Exp_Name (Ulv.Parser.Name name) ->
+        Ulv.Canonical.Exp_Name nameSource (Ulv.Common.Name name) ->
             Just <| "Name(\"" ++ name ++ "\")"
 
-        Ulv.Canonical.Exp_Assign (Ulv.Parser.Name name) ->
+        Ulv.Canonical.Exp_Assign (Ulv.Common.Name name) ->
             Just <| "Command{name = Name(\"" ++ name ++ "\"), cmd = .Assign}"
 
         Ulv.Canonical.Exp_Drop ->
             Just <| "Command{name = Name(\"_\"), cmd = .Drop}"
 
-        Ulv.Canonical.Exp_Push (Ulv.Parser.Name name) ->
+        Ulv.Canonical.Exp_Push nameSource (Ulv.Common.Name name) ->
             Just <| "Command{name = Name(\"" ++ name ++ "\"), cmd = .Push}"
 
         Ulv.Canonical.Exp_Quote body ->
             Just <| "Quote({" ++ compileExpressions body ++ "})"
 
-        Ulv.Canonical.Exp_Tag (Ulv.Parser.Tag tag) ->
+        Ulv.Canonical.Exp_Tag (Ulv.Common.Tag tag) ->
             Just <| "Tag(\"" ++ tag ++ "\")"
-
-        Ulv.Canonical.Exp_Comment _ ->
-            Nothing
 
         Ulv.Canonical.Exp_InternalInline internal ->
             case String.split " :: " internal of
@@ -806,7 +1046,7 @@ compileInternal expression =
         Ulv.Canonical.Exp_String _ ->
             []
 
-        Ulv.Canonical.Exp_Name _ ->
+        Ulv.Canonical.Exp_Name _ _ ->
             []
 
         Ulv.Canonical.Exp_Assign _ ->
@@ -815,16 +1055,13 @@ compileInternal expression =
         Ulv.Canonical.Exp_Drop ->
             []
 
-        Ulv.Canonical.Exp_Push _ ->
+        Ulv.Canonical.Exp_Push _ _ ->
             []
 
         Ulv.Canonical.Exp_Quote body ->
             List.concatMap compileInternal body
 
         Ulv.Canonical.Exp_Tag _ ->
-            []
-
-        Ulv.Canonical.Exp_Comment _ ->
             []
 
         Ulv.Canonical.Exp_InternalInline internal ->

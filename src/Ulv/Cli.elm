@@ -1,13 +1,18 @@
 module Ulv.Cli exposing (run)
 
+import Ansi.Color
+import AssocList
 import BackendTask exposing (BackendTask)
 import BackendTask.File
 import Cli.Option
 import Cli.OptionsParser
 import Cli.Program
+import Extra.List
+import Extra.Result
 import FatalError exposing (FatalError)
 import Pages.Script exposing (Script)
 import Ulv.Canonical
+import Ulv.Common
 import Ulv.Odin
 import Ulv.Parser
 
@@ -16,27 +21,90 @@ run : Script
 run =
     Pages.Script.withCliOptions program
         (\{ entryFilePath, debugMode } ->
-            BackendTask.File.rawFile entryFilePath
-                |> BackendTask.allowFatal
+            loadFiles debugMode (AssocList.singleton ( entryFilePath, Nothing ) ()) AssocList.empty
                 |> BackendTask.andThen
-                    (Ulv.Parser.parse debugMode entryFilePath
-                        >> Result.mapError (parseErrorsPrettyPrint >> FatalError.fromString)
+                    (AssocList.toList
+                        >> List.map (\( pathStr, module_ ) -> Ulv.Canonical.canonicalize (Ulv.Common.Path pathStr) module_)
+                        >> Extra.Result.fromList
+                        >> Result.map (List.concatMap (\( path, defs ) -> List.map (Tuple.pair path) defs))
+                        >> Result.mapError (List.concat >> canonicalErrorsPrettyPrint >> FatalError.fromString)
                         >> BackendTask.fromResult
                     )
                 |> BackendTask.andThen
-                    (Ulv.Canonical.canonicalize
-                        >> Result.mapError (canonicalErrorsPrettyPrint >> FatalError.fromString)
-                        >> BackendTask.fromResult
-                    )
-                |> BackendTask.andThen
-                    (\expressions ->
+                    (\modules_ ->
                         Pages.Script.writeFile
                             { path = "ulv.odin"
-                            , body = Ulv.Odin.compile debugMode expressions
+                            , body =
+                                modules_
+                                    |> List.reverse
+                                    |> Ulv.Odin.compile debugMode
                             }
                             |> BackendTask.allowFatal
                     )
         )
+
+
+type alias Modules =
+    AssocList.Dict String Ulv.Parser.Module
+
+
+loadFiles : Bool -> AssocList.Dict ( String, Maybe String ) () -> Modules -> BackendTask FatalError Modules
+loadFiles debugMode filePaths loadedModules =
+    case AssocList.keys filePaths of
+        [] ->
+            BackendTask.succeed loadedModules
+
+        pathsToLoad ->
+            pathsToLoad
+                |> List.map
+                    (\( filePath, maybeRelativeDir ) ->
+                        BackendTask.File.rawFile filePath
+                            |> (case maybeRelativeDir of
+                                    Nothing ->
+                                        identity
+
+                                    Just relativeDir ->
+                                        BackendTask.inDir relativeDir
+                               )
+                            |> BackendTask.allowFatal
+                            |> BackendTask.andThen
+                                (Ulv.Parser.parse debugMode filePath
+                                    >> Result.mapError (parseErrorsPrettyPrint >> FatalError.fromString)
+                                    >> Result.map (Tuple.pair filePath)
+                                    >> BackendTask.fromResult
+                                )
+                    )
+                |> BackendTask.combine
+                |> BackendTask.andThen
+                    (List.foldl
+                        (\( filePath, module_ ) ( toLoad, mods ) ->
+                            let
+                                relativePath =
+                                    filePath
+                                        |> String.split "/"
+                                        |> List.reverse
+                                        |> List.drop 1
+                                        |> List.reverse
+                                        |> String.join "/"
+                                        |> Just
+                            in
+                            ( module_.includes
+                                |> List.filterMap
+                                    (\( Ulv.Common.Path path, _ ) ->
+                                        if AssocList.member path mods then
+                                            Nothing
+
+                                        else
+                                            Just ( ( path ++ ".ulv", relativePath ), () )
+                                    )
+                                |> AssocList.fromList
+                                |> AssocList.union toLoad
+                            , AssocList.insert filePath module_ mods
+                            )
+                        )
+                        ( AssocList.empty, loadedModules )
+                        >> (\( newPaths, loaded ) -> loadFiles debugMode newPaths loaded)
+                    )
 
 
 canonicalErrorsPrettyPrint : List Ulv.Canonical.Error -> String
@@ -46,7 +114,7 @@ canonicalErrorsPrettyPrint errors =
 
 parseErrorsPrettyPrint : ( String, List Ulv.Parser.DeadEnd ) -> String
 parseErrorsPrettyPrint ( source, deadEnds ) =
-    "-- ERRORS --------------------\n"
+    Ansi.Color.fontColor Ansi.Color.red "-- ERRORS --------------------\n"
         ++ (deadEnds
                 |> List.map (parseErrorPrettyPrint source)
                 |> String.join "\n------------\n"
@@ -56,31 +124,9 @@ parseErrorsPrettyPrint ( source, deadEnds ) =
 parseErrorPrettyPrint : String -> Ulv.Parser.DeadEnd -> String
 parseErrorPrettyPrint source deadEnd =
     let
-        _ =
-            Debug.log "dead end" deadEnd
-    in
-    -- { col = 1
-    -- , contextStack =
-    --     [ { col = 1
-    --       , context = Ctx_Quote
-    --       , row = 2
-    --       }
-    --     , { col = 1
-    --       , context = Ctx_Expression
-    --       , row = 2
-    --       }
-    --     , { col = 1
-    --       , context = Ctx_File "examples/core.ulv"
-    --       , row = 1
-    --       }
-    --     ]
-    -- , problem = Expect_Symbol "("
-    -- , row = 2
-    -- }
-    let
         filePath =
             deadEnd.contextStack
-                |> listFind
+                |> Extra.List.find
                     (\ctx ->
                         case ctx.context of
                             Ulv.Parser.Ctx_File path ->
@@ -97,6 +143,9 @@ parseErrorPrettyPrint source deadEnd =
                 |> List.drop (deadEnd.row - 1)
                 |> List.head
                 |> Maybe.withDefault ""
+
+        -- _ =
+        --     Debug.log "dead end" deadEnd
     in
     filePath
         ++ "\n"
@@ -105,41 +154,41 @@ parseErrorPrettyPrint source deadEnd =
                     "Unexpected Error!"
 
                 narrowestScope :: _ ->
-                    case narrowestScope.context of
-                        Ulv.Parser.Ctx_Quote ->
-                            case deadEnd.problem of
-                                Ulv.Parser.Expect_Symbol symbol ->
-                                    String.concat
-                                        [ "I was expecting to find the start of a Quote but found:"
-                                        , "\n\n"
-                                        , String.fromInt deadEnd.row ++ "│ " ++ errorLine
-                                        , "\n"
-                                        , String.repeat (String.length (String.fromInt deadEnd.row)) " " ++ "│ " ++ String.repeat (deadEnd.col - 1) " " ++ String.repeat (String.length symbol) "^"
-                                        , "\n\n"
-                                        , "Quotes should be of the form: (words go here)"
-                                        ]
+                    case deadEnd.problem of
+                        Ulv.Parser.Expect_Symbol symbol ->
+                            String.concat
+                                [ "I was expecting to find the start of a quote but found:"
+                                , "\n\n"
+                                , String.fromInt deadEnd.row ++ "│ " ++ errorLine
+                                , "\n"
+                                , String.repeat (String.length (String.fromInt deadEnd.row)) " " ++ "│ " ++ String.repeat (deadEnd.col - 1) " " ++ errorPointers (String.length symbol)
+                                , "\n\n"
+                                , "Quotes should be of the form: (words go here)"
+                                ]
 
-                                _ ->
-                                    "prob: " ++ Debug.toString deadEnd
+                        Ulv.Parser.Expect_StringBadQuote ->
+                            String.concat
+                                [ "I was expecting to find the start of a string but found:"
+                                , "\n\n"
+                                , String.fromInt deadEnd.row ++ "│ " ++ errorLine
+                                , "\n"
+                                , String.repeat (String.length (String.fromInt deadEnd.row)) " " ++ "│ " ++ errorPointers (deadEnd.col - 1)
+                                , "\n\n"
+                                , "In Ulv, strings start and end with `, try replacing your \" with ` and runnign again."
+                                ]
 
                         _ ->
-                            "ctx: " ++ Debug.toString narrowestScope
+                            "prob: " ++ Debug.toString deadEnd
+            --     case narrowestScope.context of
+            --         Ulv.Parser.Ctx_Quote ->
+            -- _ ->
+            --     "ctx: " ++ Debug.toString narrowestScope
            )
 
 
-listFind : (a -> Maybe b) -> List a -> Maybe b
-listFind predicate list =
-    case list of
-        [] ->
-            Nothing
-
-        next :: rest ->
-            case predicate next of
-                Just res ->
-                    Just res
-
-                Nothing ->
-                    listFind predicate rest
+errorPointers : Int -> String
+errorPointers length =
+    Ansi.Color.fontColor Ansi.Color.red (String.repeat length "^")
 
 
 type alias CliOptions =

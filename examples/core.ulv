@@ -1,3 +1,7 @@
+# Common code for use in most every program
+
+dup: (:x ^x ^x)
+
 
 length: (#{
 internal__core__length :: proc(env: ^Env) {
@@ -31,8 +35,3 @@ internal__core__reverse :: proc(env: ^Env) {
   }
 }
 }#)
-
-
-(:x ^x ^x) :dup
-
-`carl` dup reverse print print
