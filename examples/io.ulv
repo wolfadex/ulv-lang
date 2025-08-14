@@ -6,8 +6,14 @@ internal__io__read_file :: proc(env: ^Env) {
 
   #partial switch val in value {
   case string:
-
-    append(&env.stack, len(val))
+    data, err := os.read_entire_file_or_err(val, allocator = context.temp_allocator)
+    if err != nil {
+        append(&env.stack, string("file read error"))
+        append(&env.stack, Tag("@Err"))
+    } else {
+        append(&env.stack, string(data))
+        append(&env.stack, Tag("@Ok"))
+    }
   case:
     panic("Expected a string for a file path")
   }

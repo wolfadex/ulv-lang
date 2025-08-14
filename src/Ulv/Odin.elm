@@ -1,5 +1,7 @@
 module Ulv.Odin exposing (compile)
 
+import AssocList
+import Extra.List
 import Ulv.Canonical
 import Ulv.Common
 
@@ -10,6 +12,7 @@ compile debugMode definitions =
 
 import "core:fmt"
 import "core:slice"
+import os "core:os"
 import "core:strings\""""
         ++ (if debugMode then
                 """
@@ -63,9 +66,23 @@ main :: proc() {"""
     defer delete(env.dict)
 
     // RUN PROGRAM
-    for value in compiled_values {
-        eval(&env, value)
-    }
+    """
+        ++ (definitions
+                |> Extra.List.find
+                    (\(( _, definition ) as def) ->
+                        if definition.name == Ulv.Common.Name "main" then
+                            Just def
+
+                        else
+                            Nothing
+                    )
+                |> Maybe.map
+                    (\( srcPath, definition ) ->
+                        compileName AssocList.empty srcPath (Ulv.Canonical.ExternalSource srcPath) definition.name ++ "(&env)"
+                    )
+                |> Maybe.withDefault "panic(\"main not found!!\")"
+           )
+        ++ """
 }
 
 internal_initialize :: proc(env: ^Env) {"""
@@ -707,22 +724,31 @@ find_named :: proc(dict: ^[dynamic]Word, label: Name) -> (w: Word, found: bool) 
     return
 }
 
-compiled_values : []Value = {}
+// USER DEFINED CODE
 """
         ++ compileDefinitions definitions
-        -- ++ compileInternals expressions
-        ++ "// TODO - compile internals"
+        ++ """
+
+// INTERNALS
+"""
+        ++ compileInternals definitions
 
 
 compileDefinitions : List ( Ulv.Common.Path, Ulv.Canonical.Definition ) -> String
 compileDefinitions definitions =
+    let
+        localDefs =
+            List.foldl (\( _, def ) -> AssocList.insert def.name ())
+                AssocList.empty
+                definitions
+    in
     definitions
-        |> List.map compileDefinition
+        |> List.map (compileDefinition localDefs)
         |> String.join "\n\n"
 
 
-compileDefinition : ( Ulv.Common.Path, Ulv.Canonical.Definition ) -> String
-compileDefinition ( srcPath, definition ) =
+compileDefinition : AssocList.Dict Ulv.Common.Name () -> ( Ulv.Common.Path, Ulv.Canonical.Definition ) -> String
+compileDefinition localDefNames ( localSrc, definition ) =
     let
         doc =
             case definition.docComment of
@@ -732,14 +758,14 @@ compileDefinition ( srcPath, definition ) =
                 Just docComment ->
                     docComment
                         |> String.split "\n"
-                        |> List.map (\line -> "\\\\ " ++ line)
+                        |> List.map (\line -> "// " ++ line)
                         |> String.join "\n"
     in
-    doc ++ "\n" ++ compileName (Ulv.Canonical.ExternalSource srcPath) definition.name ++ compileDefinitionBody definition.body
+    doc ++ "\n" ++ compileName localDefNames localSrc Ulv.Canonical.LocalSource definition.name ++ compileDefinitionBody localDefNames localSrc definition.body
 
 
-compileDefinitionBody : Ulv.Canonical.Expression -> String
-compileDefinitionBody expression =
+compileDefinitionBody : AssocList.Dict Ulv.Common.Name () -> Ulv.Common.Path -> Ulv.Canonical.Expression -> String
+compileDefinitionBody localDefNames localSrc expression =
     case expression of
         Ulv.Canonical.Exp_Integer int ->
             " : int = " ++ String.fromInt int
@@ -754,7 +780,7 @@ compileDefinitionBody expression =
             " : string = " ++ compileString string
 
         Ulv.Canonical.Exp_Quote body ->
-            " :: proc(env: ^Env) {\n" ++ compileBodyExpressions 0 1 body ++ "\n}"
+            " :: proc(env: ^Env) {\n" ++ compileBodyExpressions localDefNames localSrc 0 1 body ++ "\n}"
 
         Ulv.Canonical.Exp_Name nameSource (Ulv.Common.Name name) ->
             "// :: " ++ "TODO - name"
@@ -809,14 +835,14 @@ compileVariableName code =
         char
 
 
-compileBodyExpressions : Int -> Int -> List Ulv.Canonical.Expression -> String
-compileBodyExpressions nextVariableId indentationDpeth expressions =
+compileBodyExpressions : AssocList.Dict Ulv.Common.Name () -> Ulv.Common.Path -> Int -> Int -> List Ulv.Canonical.Expression -> String
+compileBodyExpressions localDefNames localSrc nextVariableId indentationDpeth expressions =
     expressions
         |> List.foldl
             (\expression ( exprs, nextVar ) ->
                 let
                     ( expr, nextV ) =
-                        compileBodyExpression nextVar indentationDpeth expression
+                        compileBodyExpression localDefNames localSrc nextVar indentationDpeth expression
                 in
                 ( expr :: exprs
                 , nextV
@@ -828,8 +854,8 @@ compileBodyExpressions nextVariableId indentationDpeth expressions =
         |> String.join "\n"
 
 
-compileBodyExpression : Int -> Int -> Ulv.Canonical.Expression -> ( String, Int )
-compileBodyExpression nextVariableId indentationDpeth expression =
+compileBodyExpression : AssocList.Dict Ulv.Common.Name () -> Ulv.Common.Path -> Int -> Int -> Ulv.Canonical.Expression -> ( String, Int )
+compileBodyExpression localDefNames localSrc nextVariableId indentationDpeth expression =
     let
         indentationPadding =
             String.repeat (indentationDpeth * 2) " "
@@ -851,7 +877,7 @@ compileBodyExpression nextVariableId indentationDpeth expression =
             )
 
         Ulv.Canonical.Exp_String string ->
-            ( indentationPadding ++ "append(&env.stack, " ++ compileString string ++ ")"
+            ( indentationPadding ++ "append(&env.stack, string(" ++ compileString string ++ "))"
             , nextVariableId
             )
 
@@ -869,30 +895,50 @@ compileBodyExpression nextVariableId indentationDpeth expression =
 
         Ulv.Canonical.Exp_Name nameSource name ->
             let
-                varName =
-                    compileVariableName nextVariableId
-
                 compName =
-                    compileName nameSource name
+                    compileName localDefNames localSrc nameSource name
+
+                compileGetName () =
+                    let
+                        varName =
+                            compileVariableName nextVariableId
+                    in
+                    ( [ varName ++ ", " ++ varName ++ "_found := find_named(&env.dict, \"" ++ compName ++ "\")"
+                      , "if " ++ varName ++ "_found {"
+                      , "  #partial switch nv in " ++ varName ++ ".value {"
+                      , "  case Quote:"
+                      , "    for w in nv {"
+                      , "      eval(env, w)"
+                      , "    }"
+                      , "  case:"
+                      , "    eval(env, " ++ varName ++ ".value)"
+                      , "  }"
+                      , "} else {"
+                      , "  panic(\"Unknown word! " ++ compName ++ "\")"
+                      , "}"
+                      ]
+                        |> List.map (\line -> indentationPadding ++ line)
+                        |> String.join "\n"
+                    , nextVariableId + 1
+                    )
             in
-            ( [ varName ++ ", found := find_named(&env.dict, \"" ++ compName ++ "\")"
-              , "if found {"
-              , "  #partial switch nv in " ++ varName ++ ".value {"
-              , "  case Quote:"
-              , "    for w in nv {"
-              , "      eval(env, w)"
-              , "    }"
-              , "  case:"
-              , "    eval(env, " ++ varName ++ ".value)"
-              , "  }"
-              , "} else {"
-              , "  panic(\"Unknown word! " ++ compName ++ "\")"
-              , "}"
-              ]
-                |> List.map (\line -> indentationPadding ++ line)
-                |> String.join "\n"
-            , nextVariableId + 1
-            )
+            case nameSource of
+                Ulv.Canonical.BuiltIn ->
+                    compileGetName ()
+
+                Ulv.Canonical.LocalSource ->
+                    if AssocList.member name localDefNames then
+                        ( indentationPadding ++ compName ++ "(env)"
+                        , nextVariableId
+                        )
+
+                    else
+                        compileGetName ()
+
+                Ulv.Canonical.ExternalSource _ ->
+                    ( indentationPadding ++ compName ++ "(env)"
+                    , nextVariableId
+                    )
 
         Ulv.Canonical.Exp_Assign (Ulv.Common.Name name) ->
             let
@@ -918,13 +964,13 @@ compileBodyExpression nextVariableId indentationDpeth expression =
                     compileVariableName nextVariableId
 
                 compName =
-                    compileName nameSource name
+                    compileName localDefNames localSrc nameSource name
             in
-            ( [ varName ++ ", found := find_named(&env.dict, \"" ++ compName ++ "\")"
-              , "if found {"
+            ( [ varName ++ ", " ++ varName ++ "_found := find_named(&env.dict, \"" ++ compName ++ "\")"
+              , "if " ++ varName ++ "_found {"
               , "    append(&env.stack, " ++ varName ++ ".value)"
               , "} else {"
-              , "    panic(\"Unknown word! compName\")"
+              , "    panic(\"Unknown word! " ++ compName ++ "\")"
               , "}"
               ]
                 |> List.map (\line -> indentationPadding ++ line)
@@ -950,14 +996,30 @@ compileBodyExpression nextVariableId indentationDpeth expression =
             )
 
 
-compileName : Ulv.Canonical.NameSource -> Ulv.Common.Name -> String
-compileName nameSource (Ulv.Common.Name name) =
+compileName : AssocList.Dict Ulv.Common.Name () -> Ulv.Common.Path -> Ulv.Canonical.NameSource -> Ulv.Common.Name -> String
+compileName localDefNames (Ulv.Common.Path localSrc) nameSource (Ulv.Common.Name name) =
     case nameSource of
         Ulv.Canonical.BuiltIn ->
             name
 
         Ulv.Canonical.LocalSource ->
-            name
+            if AssocList.member (Ulv.Common.Name name) localDefNames then
+                (localSrc
+                    |> (\p ->
+                            if String.startsWith "./" p then
+                                String.dropLeft 2 p
+
+                            else
+                                p
+                       )
+                    |> String.replace ".ulv" ""
+                    |> String.replace "/" "_"
+                )
+                    ++ "__"
+                    ++ name
+
+            else
+                name
 
         Ulv.Canonical.ExternalSource (Ulv.Common.Path path) ->
             (path
@@ -1024,10 +1086,10 @@ compileExpression expression =
                     Nothing
 
 
-compileInternals : List Ulv.Canonical.Expression -> String
-compileInternals expressions =
-    expressions
-        |> List.concatMap compileInternal
+compileInternals : List ( Ulv.Common.Path, Ulv.Canonical.Definition ) -> String
+compileInternals definitions =
+    definitions
+        |> List.concatMap (\( _, definition ) -> compileInternal definition.body)
         |> String.join "\n"
 
 

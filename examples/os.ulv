@@ -1,0 +1,14 @@
+#| Access command line arguments by 0 based index
+args: (#{
+internal__os__args :: proc(env: ^Env) {
+  value := pop(&env.stack)
+
+  #partial switch val in value {
+  case int:
+    arg := os.args[val]
+    append(&env.stack, string(arg))
+  case:
+    panic("Expected an int for an arg index")
+  }
+}
+}#)

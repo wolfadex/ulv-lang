@@ -35,3 +35,11 @@ internal__core__reverse :: proc(env: ^Env) {
   }
 }
 }#)
+
+endif: (:f :t :c :fn ^f ^t ^c fn)
+
+
+# Working with  tags
+
+
+onResult: (:ok :err :tag  ^if (tag @Ok =) (ok) (err) endif)
