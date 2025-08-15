@@ -1,14 +1,36 @@
-(`` (:res :str (^str` ` ^res) concat) fold) :join
+join: (`` (:res :str (^str` ` ^res) concat) fold)
 
-(`` =) :isEmpty?
+isEmpty?: (`` =)
 
+take: (`implement` todo)
 
+drop: (`implement` todo)
 
-(`implement` todo) :take
+split: (#{
+internal__strings__split :: proc(env: ^Env) {
+    separator := pop(&env.stack)
+    value := pop(&env.stack)
 
-(`implement` todo) :drop
+    #partial switch sep in separator {
+    case string:
+        #partial switch &val in value {
+        case string:
+            result : Quote
+            defer delete(result)
 
-(`implement` todo) :split
+            for str in strings.split_iterator(&val, sep) {
+                append(&result, str)
+			}
 
+			append(&env.stack, result)
+        case:
+            panic("Expected a string for separating")
+        }
+    case:
+        panic("Expected a string for a separator")
+    }
+}
+}#)
 
-length
+lines: (`
+` split)

@@ -8,7 +8,8 @@ import Ulv.Common
 
 compile : Bool -> List ( Ulv.Common.Path, Ulv.Canonical.Definition ) -> String
 compile debugMode definitions =
-    """package ulv
+    """#+feature dynamic-literals
+package ulv
 
 import "core:fmt"
 import "core:slice"
@@ -292,7 +293,7 @@ internal_initialize :: proc(env: ^Env) {"""
         fmt.println(value_to_print_string(value))
     }})
     append(&env.dict, Word{ label = "stack", value = proc(env: ^Env) {
-        append(&env.stack, Quote(env.stack[:]))
+        append(&env.stack, Quote(slice.clone_to_dynamic(env.stack[:], allocator = context.temp_allocator)))
     }})
     append(&env.dict, Word{ label = "force", value = proc(env: ^Env) {
         value := pop(&env.stack)
@@ -327,7 +328,7 @@ internal_initialize :: proc(env: ^Env) {"""
                     if len(local_env.stack) == 1 {
                         vals[i] = local_env.stack[0]
                     } else {
-                        vals[i] = Quote(local_env.stack[:])
+                        vals[i] = Quote(slice.clone_to_dynamic(local_env.stack[:], allocator = context.temp_allocator))
                     }
                 }
 
@@ -362,7 +363,7 @@ internal_initialize :: proc(env: ^Env) {"""
                     if len(local_env.stack) == 1 {
                         result = local_env.stack[0]
                     } else {
-                        result = Quote(local_env.stack[:])
+                        result = Quote(slice.clone_to_dynamic(local_env.stack[:], allocator = context.temp_allocator))
                     }
                 }
 
@@ -392,9 +393,9 @@ internal_initialize :: proc(env: ^Env) {"""
 
         #partial switch val in local_env.stack[0] {
         case string:
-            internal_concat_string(env, local_env.stack[:])
+            internal_concat_string(env, slice.clone_to_dynamic(local_env.stack[:], allocator = context.temp_allocator))
         case Quote:
-            internal_concat_quotes(env, local_env.stack[:])
+            internal_concat_quotes(env, slice.clone_to_dynamic(local_env.stack[:], allocator = context.temp_allocator))
         case:
             panic("This type cannot be concated")
         }
@@ -435,25 +436,20 @@ internal_concat_string :: proc(env: ^Env, values: Quote) {
 }
 
 internal_concat_quotes :: proc(env: ^Env, values: Quote) {
-    quotes := make([]Quote, len(values))
-    defer delete(quotes)
+    final_quote : Quote
 
-    for value, i in values {
+    for value in values {
         #partial switch val in value {
         case Quote:
-            quotes[i] = val
+            for item in val {
+                append(&final_quote, item)
+            }
         case:
             panic("Expected a quote for concatenation")
         }
     }
 
-    quote, err := slice.concatenate(quotes, allocator = context.temp_allocator)
-
-    if err != nil {
-        panic("Error concating quotes")
-    }
-
-    append(&env.stack, Quote(quote))
+    append(&env.stack, final_quote)
 }
 
 internal_compare :: proc(left, right: ^Value) -> Tag {
@@ -693,7 +689,7 @@ Word :: struct {
 
 Value :: union #no_nil {int, f64, string, bool, Name, Tag, Quote, Command, Internal}
 
-Quote :: []Value
+Quote :: [dynamic]Value
 
 Name :: distinct string
 
@@ -882,15 +878,24 @@ compileBodyExpression localDefNames localSrc nextVariableId indentationDpeth exp
             )
 
         Ulv.Canonical.Exp_Quote _ ->
-            case compileExpression expression of
+            case compileExpression localDefNames localSrc nextVariableId expression of
                 Nothing ->
                     ( ""
                     , nextVariableId
                     )
 
-                Just compiledQuote ->
-                    ( indentationPadding ++ "append(&env.stack, " ++ compiledQuote ++ ")"
-                    , nextVariableId
+                Just ( compiledQuote, nextVarId ) ->
+                    let
+                        varName =
+                            compileVariableName nextVarId
+                    in
+                    ( [ varName ++ " := " ++ compiledQuote
+                      , "defer delete(" ++ varName ++ ")"
+                      , "append(&env.stack, " ++ varName ++ ")"
+                      ]
+                        |> List.map (\line -> indentationPadding ++ line)
+                        |> String.join "\n"
+                    , nextVarId + 1
                     )
 
         Ulv.Canonical.Exp_Name nameSource name ->
@@ -998,31 +1003,9 @@ compileBodyExpression localDefNames localSrc nextVariableId indentationDpeth exp
 
 compileName : AssocList.Dict Ulv.Common.Name () -> Ulv.Common.Path -> Ulv.Canonical.NameSource -> Ulv.Common.Name -> String
 compileName localDefNames (Ulv.Common.Path localSrc) nameSource (Ulv.Common.Name name) =
-    case nameSource of
-        Ulv.Canonical.BuiltIn ->
-            name
-
-        Ulv.Canonical.LocalSource ->
-            if AssocList.member (Ulv.Common.Name name) localDefNames then
-                (localSrc
-                    |> (\p ->
-                            if String.startsWith "./" p then
-                                String.dropLeft 2 p
-
-                            else
-                                p
-                       )
-                    |> String.replace ".ulv" ""
-                    |> String.replace "/" "_"
-                )
-                    ++ "__"
-                    ++ name
-
-            else
-                name
-
-        Ulv.Canonical.ExternalSource (Ulv.Common.Path path) ->
-            (path
+    let
+        nameFromSource src =
+            (src
                 |> (\p ->
                         if String.startsWith "./" p then
                             String.dropLeft 2 p
@@ -1034,53 +1017,115 @@ compileName localDefNames (Ulv.Common.Path localSrc) nameSource (Ulv.Common.Name
                 |> String.replace "/" "_"
             )
                 ++ "__"
-                ++ name
+                ++ symbolSubstitution name
+    in
+    case nameSource of
+        Ulv.Canonical.BuiltIn ->
+            name
+
+        Ulv.Canonical.LocalSource ->
+            if AssocList.member (Ulv.Common.Name name) localDefNames then
+                nameFromSource localSrc
+
+            else
+                name
+
+        Ulv.Canonical.ExternalSource (Ulv.Common.Path path) ->
+            nameFromSource path
 
 
-compileExpressions : List Ulv.Canonical.Expression -> String
-compileExpressions expressions =
+symbolSubstitution : String -> String
+symbolSubstitution name =
+    name
+        |> String.split ""
+        |> List.map
+            (\char ->
+                case char of
+                    "?" ->
+                        "___quest___"
+
+                    "!" ->
+                        "___bang___"
+
+                    _ ->
+                        char
+            )
+        |> String.concat
+
+
+compileExpressions : AssocList.Dict Ulv.Common.Name () -> Ulv.Common.Path -> Int -> List Ulv.Canonical.Expression -> ( String, Int )
+compileExpressions localDefNames localSrc nextVariableId expressions =
     expressions
-        |> List.filterMap compileExpression
-        |> String.join ", "
+        |> List.foldl
+            (\expression ( exprs, nextVarId ) ->
+                case compileExpression localDefNames localSrc nextVarId expression of
+                    Nothing ->
+                        ( exprs, nextVarId )
+
+                    Just ( expr, varId ) ->
+                        ( expr :: exprs, varId )
+            )
+            ( [], nextVariableId )
+        |> Tuple.mapFirst (List.reverse >> String.join ", ")
 
 
-compileExpression : Ulv.Canonical.Expression -> Maybe String
-compileExpression expression =
+compileExpression : AssocList.Dict Ulv.Common.Name () -> Ulv.Common.Path -> Int -> Ulv.Canonical.Expression -> Maybe ( String, Int )
+compileExpression localDefNames localSrc nextVariableId expression =
     case expression of
         Ulv.Canonical.Exp_Integer int ->
-            Just <| "int(" ++ String.fromInt int ++ ")"
+            Just ( "int(" ++ String.fromInt int ++ ")", nextVariableId )
 
         Ulv.Canonical.Exp_Float float ->
-            Just <| "f64(" ++ String.fromFloat float ++ ")"
+            Just ( "f64(" ++ String.fromFloat float ++ ")", nextVariableId )
 
         Ulv.Canonical.Exp_Boolean bool ->
-            Just <| compileBoolean bool
+            Just ( compileBoolean bool, nextVariableId )
 
         Ulv.Canonical.Exp_String string ->
-            Just <| "string(" ++ compileString string ++ ")"
+            Just ( "string(" ++ compileString string ++ ")", nextVariableId )
 
-        Ulv.Canonical.Exp_Name nameSource (Ulv.Common.Name name) ->
-            Just <| "Name(\"" ++ name ++ "\")"
+        Ulv.Canonical.Exp_Name nameSource name ->
+            let
+                compName =
+                    compileName localDefNames localSrc nameSource name
+            in
+            Just
+                ( case nameSource of
+                    Ulv.Canonical.BuiltIn ->
+                        "Name(\"" ++ compName ++ "\")"
+
+                    Ulv.Canonical.LocalSource ->
+                        -- "Internal(" ++ compName ++ ")"
+                        "Name(\"" ++ compName ++ "\")"
+
+                    Ulv.Canonical.ExternalSource _ ->
+                        "Internal(" ++ compName ++ ")"
+                , nextVariableId
+                )
 
         Ulv.Canonical.Exp_Assign (Ulv.Common.Name name) ->
-            Just <| "Command{name = Name(\"" ++ name ++ "\"), cmd = .Assign}"
+            Just ( "Command{name = Name(\"" ++ name ++ "\"), cmd = .Assign}", nextVariableId )
 
         Ulv.Canonical.Exp_Drop ->
-            Just <| "Command{name = Name(\"_\"), cmd = .Drop}"
+            Just ( "Command{name = Name(\"_\"), cmd = .Drop}", nextVariableId )
 
         Ulv.Canonical.Exp_Push nameSource (Ulv.Common.Name name) ->
-            Just <| "Command{name = Name(\"" ++ name ++ "\"), cmd = .Push}"
+            Just ( "Command{name = Name(\"" ++ name ++ "\"), cmd = .Push}", nextVariableId )
 
         Ulv.Canonical.Exp_Quote body ->
-            Just <| "Quote({" ++ compileExpressions body ++ "})"
+            let
+                ( bodyStr, nextVarId ) =
+                    compileExpressions localDefNames localSrc nextVariableId body
+            in
+            Just ( "Quote({" ++ bodyStr ++ "})", nextVarId )
 
         Ulv.Canonical.Exp_Tag (Ulv.Common.Tag tag) ->
-            Just <| "Tag(\"" ++ tag ++ "\")"
+            Just ( "Tag(\"" ++ tag ++ "\")", nextVariableId )
 
         Ulv.Canonical.Exp_InternalInline internal ->
             case String.split " :: " internal of
                 name :: _ ->
-                    Just ("Internal(" ++ name ++ ")")
+                    Just ( "Internal(" ++ name ++ ")", nextVariableId )
 
                 _ ->
                     Nothing

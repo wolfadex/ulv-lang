@@ -2,10 +2,11 @@
 ./core
 ./io
 ./os
+./strings
 ]
 
 
 main: (
     1 os.args io.readFile
-    (`error` stack print) (`success` print print) core.onResult
+    (`error` stack print) (strings.lines stack print) core.fromResult
 )
